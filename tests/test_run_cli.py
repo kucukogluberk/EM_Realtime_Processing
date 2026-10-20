@@ -53,6 +53,76 @@ def test_endpoint_warning_flags_an_unreachable_endpoint():
     assert run_mod.endpoint_warning("tcp://10.0.0.1") is None            # no port
 
 
+ACQUISITION = ["--energy", "300000", "--semiangle", "20", "--angular-sampling", "1.1",
+               "--scan-sampling", "1.0", "--scan", "64", "64", "--defocus", "-1.5e4",
+               "--rotation", "-15", "--center", "48", "48"]
+
+
+def test_missing_acquisition_values_stop_the_run(monkeypatch, capsys):
+    """No silent defaults for the values that differ per microscope: the run stops before
+    anything starts and names every missing flag."""
+    import pytest
+    with pytest.raises(SystemExit) as exc:
+        monkeypatch.setattr(sys, "argv", ["run.py", "--binned", "--scan", "64", "64",
+                                          "--defocus", "-10000"])
+        run_mod.main()
+    assert exc.value.code == 2
+    err = capsys.readouterr().err.split("error:", 1)[1]           # the message, not the usage
+    for flag in ("--energy", "--semiangle", "--angular-sampling", "--scan-sampling", "--rotation"):
+        assert flag in err
+    assert "--defocus " not in err and "--scan " not in err        # given: not reported
+    assert "--center" not in err                                   # optional: the frame center
+
+
+def test_all_acquisition_values_given_is_accepted():
+    algo = registry.get("parallax")
+    args = run_mod.build_parser(algo).parse_args(algo.preprocess_argv(["--binned", *ACQUISITION]))
+    assert algo.check_args(args) == []
+    without_center = ACQUISITION[:ACQUISITION.index("--center")]
+    args = run_mod.build_parser(algo).parse_args(algo.preprocess_argv(["--binned", *without_center]))
+    assert algo.check_args(args) == []
+
+
+def test_watch_endpoint_repeats_the_warning_until_reachable(monkeypatch, capsys):
+    """A wrong DCU address must not look like a quiet wait for the scan: the warning repeats
+    until the endpoint answers, then the watcher says so once and stops."""
+    answers = iter(["[run] WARNING: cannot reach 10.0.0.9:31001", "still down", None])
+    monkeypatch.setattr(run_mod, "endpoint_warning", lambda endpoint: next(answers))
+    thread = run_mod.watch_endpoint("tcp://10.0.0.9:31001", every=0.01)
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    out = capsys.readouterr().out
+    assert "cannot reach 10.0.0.9:31001" in out
+    assert "still cannot reach 10.0.0.9:31001" in out
+    assert "10.0.0.9:31001 is reachable now" in out
+
+
+def test_watch_endpoint_is_quiet_when_reachable(monkeypatch, capsys):
+    monkeypatch.setattr(run_mod, "endpoint_warning", lambda endpoint: None)
+    assert run_mod.watch_endpoint("tcp://10.0.0.9:31001") is None
+    assert capsys.readouterr().out == ""
+
+
+def test_gpu_report_names_the_gpu_and_warns_when_ambiguous(monkeypatch):
+    """The run prints which GPU it uses (bus as in nvidia-smi), and warns when several GPUs are
+    visible (CUDA's order can differ from nvidia-smi's) or the GPU is already busy."""
+    import torch
+    props = SimpleNamespace(name="Test GPU", total_memory=80 * 2**30, pci_bus_id=0x4E)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda i: props)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda i: (79 * 2**30, 80 * 2**30))
+    assert run_mod.gpu_report() == ["[run] GPU: Test GPU, 80 GiB, PCI bus 4E"]
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda i: (40 * 2**30, 80 * 2**30))
+    lines = run_mod.gpu_report()
+    assert len(lines) == 3
+    assert "2 GPUs are visible" in lines[1] and 'device=N' in lines[1]
+    assert "40 of 80 GiB" in lines[2]
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert run_mod.gpu_report() == []
+
+
 def _non_loopback_address() -> str:
     """This machine's address on its default route (no packet is sent), else skip the test."""
     import pytest
@@ -124,3 +194,11 @@ def test_readout_flags_map_to_config():
     assert not cfg.phase_flip and not cfg.dc_correct and cfg.normalize and cfg.coverage_channel
     assert cfg.q_lowpass == 0.2 and cfg.q_highpass == 0.01
     assert cfg.suppress_nyquist is False and cfg.band_limit
+
+
+def test_frame_mean_is_kept_unless_asked():
+    """The per-frame mean subtraction removes amplitude contrast: off unless the flag is given."""
+    algo = registry.get("parallax")
+    assert not algo.build(_args(["--binned", *ACQUISITION, "--device", "cpu"])).subtract_frame_mean
+    acc = algo.build(_args(["--binned", *ACQUISITION, "--device", "cpu", "--subtract-frame-mean"]))
+    assert acc.subtract_frame_mean

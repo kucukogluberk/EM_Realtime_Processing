@@ -14,15 +14,21 @@ Two pieces, a clean host-prep / device-accumulate split:
 
 - `ParallaxAccumulator` — the hot path. Each batch of *integer* frames is uploaded as-is (or
   arrives already on the device from a Holoscan DLPack sink), cast to float on the GPU, reduced to
-  its M bright-field pixels, mean-subtracted (per-frame DC removal), and **scatter-added** into the
-  reconstruction with each BF pixel toroidally shifted by its precomputed parallax shift. This
-  scatter-add — one `index_add_` over B·M contributions per batch — is the heavy GPU compute.
+  its M bright-field pixels, and **scatter-added** into the reconstruction with each BF pixel
+  toroidally shifted by its precomputed parallax shift. This scatter-add — one `index_add_` over
+  B·M contributions per batch — is the heavy GPU compute. With `subtract_frame_mean=True` each
+  frame's mean over its BF pixels is removed first, as the reference does: that also removes the
+  amplitude contrast (the bright-field intensity at each position) below about one over the
+  probe size, so it is off by default.
 
 The math is ported from Georgios Varnavides's streaming-parallax reference; the `spatial_frequencies`
 kx/ky naming and the `(dy, dx) = shift` unpacking are preserved so correctness can be pinned by
-matching a float64 transcription of that reference in the tests (and the engine reproduces the
-reference's own output on the public apoferritin dataset, Zenodo 10.5281/zenodo.18346854, to
-float32 precision). Two deliberate departures from the reference script:
+matching a float64 transcription of that reference in the tests (and the engine, with
+`subtract_frame_mean=True`, reproduces the reference's own output on the public apoferritin dataset,
+Zenodo 10.5281/zenodo.18346854, to float32 precision). Three deliberate departures from the
+reference script:
+
+- The per-frame mean is kept unless `subtract_frame_mean=True` (see above).
 
 - The scatter uses independent `% Ny` / `% Nx` wraps — the correct toroidal boundary (the
   reference's phase-flip kernel, not ported, has a flat-wrap bug).
@@ -134,6 +140,7 @@ class ParallaxGeometry:
     semiangle_cutoff: float = 0.0       # mrad (the readout band limit)
     flip_cols: bool = False
     probe_center: tuple | None = None   # (row, col) px on the raw frame; None → frame center
+    n_clipped: int = 0                  # BF-disk pixels that fall outside the frame (dropped)
 
     @property
     def n_bf(self) -> int:
@@ -214,6 +221,7 @@ def preprocess_geometry(
         cj = gpts[1] - 1 - gpts[1] // 2 if flip_cols else gpts[1] // 2
     det_i, det_j = ci + off_i, (cj - off_j if flip_cols else cj + off_j)
     ok = (det_i >= 0) & (det_i < gpts[0]) & (det_j >= 0) & (det_j < gpts[1])
+    n_clipped = int((~ok).sum())
     if not ok.all():  # disk clips the frame edge — those tilted views fall off the detector
         inds_i, inds_j, det_i, det_j = inds_i[ok], inds_j[ok], det_i[ok], det_j[ok]
     bf_flat_inds = (det_i * gpts[1] + det_j).astype(np.int32)
@@ -232,6 +240,7 @@ def preprocess_geometry(
         flip_cols=bool(flip_cols),
         probe_center=None if probe_center is None else (float(probe_center[0]),
                                                         float(probe_center[1])),
+        n_clipped=n_clipped,
     )
 
 
@@ -265,14 +274,13 @@ class ParallaxAccumulator:
 
     def __init__(self, geometry: ParallaxGeometry, device: str | None = None,
                  measure: bool = False, readout: ReadoutConfig | None = None,
-                 accumulate: str = "all", wrap_ids: bool = False, keep_bf_mean: bool = False):
+                 accumulate: str = "all", wrap_ids: bool = False,
+                 subtract_frame_mean: bool = False):
         if accumulate not in ("all", "latest"):
             raise ValueError(f"accumulate must be 'all' or 'latest', not {accumulate!r}")
         self.device = _pick_device(device)
-        # keep_bf_mean: skip the per-frame DC removal, so a frame's total bright-field intensity
-        # (amplitude contrast, which is identical in every tilted view) is kept in the sum.
-        self.keep_bf_mean = bool(keep_bf_mean)
         self.geometry = geometry
+        self.subtract_frame_mean = bool(subtract_frame_mean)
         self.detector_shape = tuple(geometry.detector_shape)
         self.scan_shape = tuple(geometry.scan_shape)
         self.upsampled_scan_gpts = tuple(geometry.upsampled_scan_gpts)
@@ -295,7 +303,7 @@ class ParallaxAccumulator:
 
         # Side accumulators for the readout (O(B·M) adds per batch, no extra scatter): how many
         # frames each scan position contributes (0/1 for "latest"), and each BF pixel's running
-        # sum of its frame-mean-subtracted values. The readout operators are built lazily, on the
+        # sum of its deposited values. The readout operators are built lazily, on the
         # first snapshot.
         self.n_positions = self.scan_shape[0] * self.scan_shape[1]
         self._visits = torch.zeros(self.n_positions, dtype=torch.float32, device=self.device)
@@ -418,20 +426,20 @@ class ParallaxAccumulator:
         return flat_f[:, self._bf_inds], "plain"
 
     def _as_float(self, raw: torch.Tensor, kind: str) -> torch.Tensor:
-        """Gathered BF pixels → float32, per-frame mean (DC) removed unless `keep_bf_mean`."""
+        """Gathered BF pixels → float32, the per-frame mean removed if `subtract_frame_mean`."""
         g = raw.float()
         if kind == "u16":
             g = torch.where(g < 0, g + 65536.0, g)
         elif kind == "u32":
             g = torch.where(g < 0, g + 4294967296.0, g)
-        if self.keep_bf_mean:
-            return g
-        return g - g.mean(dim=1, keepdim=True)
+        if self.subtract_frame_mean:
+            g = g - g.mean(dim=1, keepdim=True)
+        return g
 
     def _accumulate_into(self, f: torch.Tensor, ids) -> None:
-        # Gather the M bright-field pixels of every frame, remove the per-frame DC (mean over BF
-        # pixels; kept with keep_bf_mean), then scatter-add each contribution to its parallax-shifted, toroidally-wrapped
-        # output position. Independent % Ny / % Nx wraps = the correct scan-grid torus.
+        # Gather the M bright-field pixels of every frame (minus the frame's mean over them, if
+        # `subtract_frame_mean`), then scatter-add each contribution to its parallax-shifted,
+        # toroidally-wrapped output position. Independent % Ny / % Nx wraps = the correct scan-grid torus.
         b = f.shape[0]
         raw, kind = self._gather(f.reshape(b, -1))
         i_bf = self._as_float(raw, kind)                       # (B, M)
@@ -523,6 +531,7 @@ class ParallaxAccumulator:
             "frames": self._n_frames,
             "coverage": float((self._visits > 0).float().mean()),
             "accumulate": self.accumulate,
+            "subtract_frame_mean": self.subtract_frame_mean,
             # the scan cursor: which pass over the scan (0-based) and how far into it
             "pass": max(max_id, 0) // self.n_positions,
             "progress": 0.0 if max_id < 0 else (max_id % self.n_positions + 1) / self.n_positions,

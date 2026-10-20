@@ -16,6 +16,7 @@ changed recently, [CHANGELOG.md](../CHANGELOG.md).
 | [`python -m tools.npy_to_dstream`](#python--m-toolsnpy_to_dstream) | convert a 4D `.npy` into a capture |
 | [`python -m tools.make_dstream`](#python--m-toolsmake_dstream) | synthetic random capture (format tests) |
 | [`python -m tools.dstream`](#python--m-toolsdstream) | inspect a capture |
+| [`python -m tools.detector_setup`](#python--m-toolsdetector_setup) | set up, arm and disarm the DCU |
 | [`python examples/viewer.py`](#python-examplesviewerpy) | desktop live viewer |
 | [`python examples/probe.py`](#python-examplesprobepy) | headless live-stream probe |
 | [`python examples/plot_result.py`](#python-examplesplot_resultpy) | plot a saved result |
@@ -43,7 +44,7 @@ usage: python -m realtime_stem.apps.run [-h] [--algorithm {parallax}]
                                         [--upsampling U] [--energy EV] [--semiangle MRAD]
                                         [--angular-sampling MRAD_PX] [--scan-sampling ANG_PX]
                                         [--center ROW COL] [--scan NY NX] [--flip-cols]
-                                        [--detector-layout LAYOUT] [--keep-bf-mean]
+                                        [--detector-layout LAYOUT] [--subtract-frame-mean]
                                         [--no-phase-flip] [--no-dc-correct] [--normalize]
                                         [--coverage] [--lowpass Q] [--highpass Q]
                                         [--butterworth-order N] [--suppress-nyquist {auto,on,off}]
@@ -97,21 +98,26 @@ usage: python -m realtime_stem.apps.run [-h] [--algorithm {parallax}]
 | parameter | default | description |
 |---|---|---|
 | `--detector HY HX` |  | Detector geometry (default: config, 192x192; --binned preset: 96x96). Changing the detector changes the BF disk — set --angular-sampling to match the mode. |
-| `--binned` | flag | ARINA 2×2-binned preset: 96×96 detector, doubled angular sampling. |
-| `--defocus C10_ANG` |  | Target defocus C10 (Å) the parallax shifts are built for (negative = underfocus). Config default: -15000. |
-| `--rotation DEG` |  | Scan/detector rotation (degrees). Config default: 0. |
+| `--binned` | flag | ARINA 2×2-binned preset: 96×96 detector (give --angular-sampling of the binned mode). |
+| `--defocus C10_ANG` |  | Target defocus C10 (Å) the parallax shifts are built for (negative = underfocus). Required. |
+| `--rotation DEG` |  | Scan/detector rotation (degrees). Required. |
 | `--c12 C12_ANG` |  | Target astigmatism magnitude C12 (Å). Config default: 0. |
 | `--phi12 DEG` |  | Target astigmatism angle phi12 (degrees). Config default: 0. |
 | `--upsampling U` |  | Output-grid upsampling (finer grid → finer shifts). Config default: 1. |
-| `--energy EV` |  | Beam energy (eV). Config default: 300000. |
-| `--semiangle MRAD` |  | Probe convergence semiangle, the bright-field cutoff (mrad). Config default: 4. |
-| `--angular-sampling MRAD_PX` |  | Detector angular sampling (mrad/px, isotropic) of the mode actually running (wins over --binned doubling). Config default: 0.5 (×2 with --binned). |
-| `--scan-sampling ANG_PX` |  | Scan step (Å, isotropic). Config default: 0.5. |
-| `--center ROW COL` |  | BF-disk center on the raw detector frames (px), py4DSTEM's Center_X Center_Y from get_probe_size. Default: the frame center (mapped through --detector-layout). |
-| `--scan NY NX` |  | Scan grid; must match what the microscope drives. Config default: 1024 1024. |
+| `--energy EV` |  | Beam energy (eV; 300 kV = 300000). Required. |
+| `--semiangle MRAD` |  | Probe convergence semiangle, the bright-field cutoff (mrad). Required. |
+| `--angular-sampling MRAD_PX` |  | Detector angular sampling (mrad/px, isotropic) of the mode actually running (binned or not). Required. |
+| `--scan-sampling ANG_PX` |  | Scan step (Å, isotropic). Required. |
+| `--center ROW COL` |  | BF-disk center on the raw detector frames (px), py4DSTEM's Center_X Center_Y from get_probe_size. Default: the frame center (mapped through --detector-layout). (The disk's radius is not an input: it is --semiangle / --angular-sampling.) |
+| `--scan NY NX` |  | Scan grid; must match what the microscope drives. Required. |
 | `--flip-cols` | flag | The detector's columns are reversed relative to the canonical layout (LiberTEM's detector_flip_cols). With --rotation this covers every transpose/flip: e.g. a transposed detector is --rotation +90 --flip-cols. Give --center as measured on the raw frames. Table in docs/GUIDE.md. |
 | `--detector-layout LAYOUT` |  | What the raw frame's (axis 0, axis 1) hold relative to the canonical (rows, cols) layout: rows,cols \| rows,-cols \| -rows,cols \| -rows,-cols \| cols,rows \| cols,-rows \| -cols,rows \| -cols,-rows. E.g. 'cols,-rows' = transposed with the second axis reversed. Adds the matching rotation and column flip to --rotation, and maps the default disk center onto the raw frame. Exclusive with --flip-cols. |
-| `--keep-bf-mean` | flag | Don't remove each frame's mean over the bright-field pixels before the shifted sum. Keeps amplitude (total bright-field) contrast, which the removal cancels exactly; at C10 = 0 the image becomes the plain bright-field image. Leave the DC correction on with it, or the static bright-field pattern dominates. |
+
+**parallax frame processing (per frame, as frames arrive)**
+
+| parameter | default | description |
+|---|---|---|
+| `--subtract-frame-mean` | flag | Subtract each frame's mean over its bright-field pixels before it is added in (as the reference implementation does). This removes the amplitude contrast (mass-thickness, diffraction) over regions larger than about the probe, and the frame-to-frame changes in beam intensity. Default: off, the mean is kept. |
 
 **parallax readout (live channels and saved images)**
 
@@ -279,6 +285,36 @@ usage: python -m tools.dstream [-h] {info} ...
 |---|---|---|
 | `file` | required | The .dstream capture. |
 
+## `python -m tools.detector_setup`
+
+Set up the DCU for the pipeline over its REST API: `check` (read only), `apply`, `arm`, `disarm`, and `scan` (arm, your `start_scan`, disarm). Never drives the scan generator.
+
+```text
+usage: python -m tools.detector_setup [-h] --ip IP [--http-port HTTP_PORT] [--api API]
+                                      [--scan NY NX] [--binned] [--frame-time FRAME_TIME]
+                                      [--trigger-mode TRIGGER_MODE] [--keep-filewriter]
+                                      {check,apply,arm,disarm,scan}
+```
+
+**arguments**
+
+| parameter | default | description |
+|---|---|---|
+| `step {check,apply,arm,disarm,scan}` | required | check: compare the settings (read only); apply: set what differs; arm; disarm: end the series; scan: arm, start_scan, disarm. |
+
+**general**
+
+| parameter | default | description |
+|---|---|---|
+| `--ip IP` | required | Address of the DCU's REST API. |
+| `--http-port HTTP_PORT` | `80` | Port of the REST API. |
+| `--api API` |  | SIMPLON API version, e.g. 1.8.0 (default: asked from the DCU). |
+| `--scan NY NX` |  | Scan positions, as given to run.py --scan (check, apply, scan). |
+| `--binned` | flag | 2x2 binning (96x96 frames). |
+| `--frame-time FRAME_TIME` |  | Seconds per frame, the scan generator's dwell time (e.g. 8.334e-6 = 120 kHz). Default: leave the DCU's as it is. |
+| `--trigger-mode TRIGGER_MODE` | `exts` | exts = one external trigger per frame, from the scan generator. |
+| `--keep-filewriter` | flag | Leave the DCU's file writer as it is (default: disabled, live only). |
+
 ## `python examples/viewer.py`
 
 Desktop live viewer: one panel per channel of the live stream.
@@ -384,10 +420,12 @@ Configured by environment variables (shown with their defaults) and one optional
 | variable | default | meaning |
 |---|---|---|
 | `IMAGE` | `realtime-stem:latest` | the Docker image (docker/Dockerfile) |
+| `GPU` | `0` | which GPU, as nvidia-smi numbers them |
 | `SCAN` | `32 32` | must match the capture's frame count (Ny*Nx) |
 | `BATCH` | `128` | frames per batch |
 | `PULL_EP` | `tcp://127.0.0.1:5555` | feeder PUSH -> run.py PULL |
 | `PUB_EP` | `tcp://127.0.0.1:5601` | run.py PUB -> viewer SUB |
+| `DEMO_FLAGS` | `--energy 300000 --semiangle 4 --angular-sampling 1.0 --scan-sampling 0.5 --defocus -15000 --rotation 0 --center 48 48` | acquisition values |
 
 ## Notebook: `realtime_stem.streaming.notebook.LiveView`
 

@@ -11,8 +11,9 @@ Parallax needs a *defocus* to compute shifts: the microscope's reported defocus 
 point (override live with `--defocus`); the shift field itself is observable, so a future step can
 refine C10 from the data.
 
-The values here are plausible ARINA-scale examples, not measured constants — set them on the CLI
-(`add_tuning_args`, below) to match your acquisition.
+The values here are plausible ARINA-scale examples for tests and the Python API, not measured
+constants. The command line does not fall back on them for the acquisition values
+(`REQUIRED_ACQUISITION_ARGS`): a run without them stops with a list of what is missing.
 """
 
 from __future__ import annotations
@@ -71,6 +72,30 @@ class ParallaxConfig:
 CONFIG = ParallaxConfig()
 
 
+# The acquisition values that change with every microscope and session. No default is safe for
+# them: a wrong one gives a plausible but wrong image, not an error. (flag, attribute, unit / hint)
+REQUIRED_ACQUISITION_ARGS = (
+    ("--energy", "energy", "beam energy in eV (300 kV = 300000)"),
+    ("--semiangle", "semiangle", "probe convergence semiangle in mrad"),
+    ("--angular-sampling", "angular_sampling",
+     "detector pixel size in mrad/px for the mode running (binned or not)"),
+    ("--scan-sampling", "scan_sampling", "scan step in Å"),
+    ("--scan", "scan", "scan positions NY NX"),
+    ("--defocus", "defocus", "defocus C10 in Å, negative = underfocus"),
+    ("--rotation", "rotation", "scan/detector rotation in degrees"),
+)   # --center is not here: the frame center is a sound default for a centered detector
+
+
+def missing_acquisition_args(args) -> list[str]:
+    """One message per required acquisition flag that was not given (empty: all there)."""
+    missing = [f"    {flag:<20} {hint}" for flag, attr, hint in REQUIRED_ACQUISITION_ARGS
+               if getattr(args, attr, None) is None]
+    if not missing:
+        return []
+    return ["these acquisition values have no default (they differ per microscope and "
+            "session):\n" + "\n".join(missing)]
+
+
 # ── shared CLI tuning knobs ───────────────────────────────────────────────────
 # The tuning-knob flag group and its unit conversions live HERE (not in run.py) so the parallax
 # algorithm owns its CLI in one place — the same flags, with the same units, whether you tune a
@@ -82,9 +107,9 @@ def add_tuning_args(p) -> None:
     c = CONFIG
     p.add_argument("--defocus", type=float, default=None, metavar="C10_ANG",
                    help="Target defocus C10 (Å) the parallax shifts are built for (negative = "
-                        f"underfocus). Config default: {c.aberration_coefs.get('C10', 0.0):g}.")
+                        "underfocus). Required.")
     p.add_argument("--rotation", type=float, default=None, metavar="DEG",
-                   help="Scan/detector rotation (degrees). Config default: 0.")
+                   help="Scan/detector rotation (degrees). Required.")
     p.add_argument("--c12", type=float, default=None, metavar="C12_ANG",
                    help="Target astigmatism magnitude C12 (Å). Config default: 0.")
     p.add_argument("--phi12", type=float, default=None, metavar="DEG",
@@ -93,23 +118,22 @@ def add_tuning_args(p) -> None:
                    help="Output-grid upsampling (finer grid → finer shifts). "
                         f"Config default: {c.upsampling_factor}.")
     p.add_argument("--energy", type=float, default=None, metavar="EV",
-                   help=f"Beam energy (eV). Config default: {c.energy:g}.")
+                   help="Beam energy (eV; 300 kV = 300000). Required.")
     p.add_argument("--semiangle", type=float, default=None, metavar="MRAD",
                    help="Probe convergence semiangle, the bright-field cutoff (mrad). "
-                        f"Config default: {c.semiangle_cutoff:g}.")
+                        f"Required.")
     p.add_argument("--angular-sampling", type=float, default=None, metavar="MRAD_PX",
                    help="Detector angular sampling (mrad/px, isotropic) of the mode actually "
-                        "running (wins over --binned doubling). Config default: "
-                        f"{c.angular_sampling[0]:g} (×2 with --binned).")
+                        "running (binned or not). Required.")
     p.add_argument("--scan-sampling", type=float, default=None, metavar="ANG_PX",
-                   help=f"Scan step (Å, isotropic). Config default: {c.scan_sampling[0]:g}.")
+                   help="Scan step (Å, isotropic). Required.")
     p.add_argument("--center", type=float, nargs=2, default=None, metavar=("ROW", "COL"),
                    help="BF-disk center on the raw detector frames (px), py4DSTEM's Center_X "
                         "Center_Y from get_probe_size. Default: the frame center (mapped through "
-                        "--detector-layout).")
+                        "--detector-layout). (The disk's radius is not an input: it is "
+                        "--semiangle / --angular-sampling.)")
     p.add_argument("--scan", type=int, nargs=2, default=None, metavar=("NY", "NX"),
-                   help="Scan grid; must match what the microscope drives. Config default: "
-                        f"{c.scan_shape[0]} {c.scan_shape[1]}.")
+                   help="Scan grid; must match what the microscope drives. Required.")
     p.add_argument("--flip-cols", action="store_true",
                    help="The detector's columns are reversed relative to the canonical layout "
                         "(LiberTEM's detector_flip_cols). With --rotation this covers every "

@@ -73,6 +73,11 @@ class Algorithm(ABC):
         """
         return argv
 
+    def check_args(self, args: argparse.Namespace) -> list[str]:
+        """Problems with the parsed args that must stop the run before it starts, e.g. a missing
+        acquisition value with no safe default (default: none)."""
+        return []
+
     @abstractmethod
     def build(self, args: argparse.Namespace) -> Accumulator:
         """Build a fresh accumulator from parsed args, and print a one-line physics summary.

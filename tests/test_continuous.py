@@ -117,8 +117,13 @@ def test_all_sums_every_pass(device):
     _feed(acc, frames, ids, batch=50)
     ref = _fresh(geo, frames, ids % _NPOS, device, coverage_channel=True)   # same frames, positions
     _close(acc.result(), ref.result())
+    # the channels subtract the scan mean from the raw float32 sum (which keeps the frame mean):
+    # the rounding error scales with the raw image, not with the channel
+    raw_scale = np.abs(ref.result()).max()
     for name, img in acc.channels().items():
-        _close(img.cpu().numpy(), ref.channels()[name].cpu().numpy())
+        want = ref.channels()[name].cpu().numpy()
+        np.testing.assert_allclose(img.cpu().numpy(), want, rtol=0,
+                                   atol=2e-5 * max(np.abs(want).max(), raw_scale))
     assert np.all(acc.channels()["coverage"].cpu().numpy() == 3 * geo.n_bf)   # 3 deposits × M
 
 
@@ -234,7 +239,7 @@ def test_runner_zmq_series_per_pass_keeps_one_image(tmp_path):
            "--live-every-rows", "3", "--out-dir", str(tmp_path),
            "--detector", "32", "32", "--scan", *map(str, _SCAN), "--energy", "300e3",
            "--semiangle", "4", "--angular-sampling", "0.307617", "--scan-sampling", f"{256 / 12}",
-           "--defocus=-1.5e4", "--rotation=-15"]
+           "--defocus=-1.5e4", "--rotation=-15", "--center", "16", "16"]
     proc = subprocess.Popen(cmd, cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True)
     headers = []

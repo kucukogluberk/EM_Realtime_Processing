@@ -25,36 +25,55 @@ realtime_stem/        the Python package
 operators/            the C++/CUDA frame receiver and GPU decompressor
 docker/Dockerfile     builds the Docker image
 examples/             live viewer, notebook, sample recording
-tools/                stream recorder, replay, simulator
+tools/                stream recorder, replay, simulator, detector setup
 scripts/              installation check and demos
 tests/                unit tests
 ```
 
 ## Requirements
 
-- Linux with an NVIDIA GPU, Docker and the NVIDIA container toolkit (`docker run --gpus all`
+- Linux with an NVIDIA GPU, Docker and the NVIDIA container toolkit (`docker run --gpus`
   must work)
 - Python 3.10+ on the host, for the viewer
 
 ## Install
 
+Have two things at hand first:
+
+- **The DCU's stream address**: the IP of the DCU's data interface on the network to this
+  machine (it can differ from the address of the DCU's web page). Port 31001 by default.
+- **Which GPU** to use: its number in `nvidia-smi -L`.
+
 ```bash
 docker build -t realtime-stem:latest -f docker/Dockerfile .
 pip install -e ".[viz,replay]"
-scripts/check_install.sh
+GPU=<N> DCU=<DCU_IP> scripts/check_install.sh
 ```
 
-The image holds the compiled code; the Python package is mounted from this folder at run time.
+The check tests the DCU address first and ends with the `--gpus` and `--endpoint` values for the
+run command. The image holds the compiled code; the Python package is mounted from this folder at
+run time.
+
+## Detector settings
+
+The DCU must stream `cbor` with `bslz4` compression, one image per scan position. Check it (read
+only), and set it if needed:
+
+```bash
+python -m tools.detector_setup check --ip <DCU_IP> --scan 256 256 --binned
+python -m tools.detector_setup apply --ip <DCU_IP> --scan 256 256 --binned --frame-time 8.334e-6
+```
 
 ## Run
 
 Start the pipeline before the scan:
 
 ```bash
-docker run --rm --network host --gpus all --ulimit stack=33554432:33554432 \
+docker run --rm --network host --gpus "device=<N>" --ulimit stack=33554432:33554432 \
   -v "$PWD":/work -v "$PWD/out":/out -w /work --entrypoint python3 \
   realtime-stem:latest -m realtime_stem.apps.run \
     --endpoint tcp://<DCU_IP>:31001 --binned --scan 256 256 \
+    --energy <eV> --semiangle <mrad> --angular-sampling <mrad/px> --scan-sampling <Å> \
     --defocus <Å> --rotation <degrees> \
     --live-endpoint tcp://127.0.0.1:5601 --continuous --out-dir /out
 ```
@@ -65,6 +84,16 @@ Watch it in a second terminal:
 python examples/viewer.py tcp://127.0.0.1:5601
 ```
 
+Then arm the detector, scan, and disarm, with your usual software or with
+`python -m tools.detector_setup arm` / `disarm --ip <DCU_IP>`.
+
+- At start-up it prints the GPU it uses, and `WARNING: cannot reach …` when the DCU address is
+  wrong. No frames can arrive until that is fixed.
+- The acquisition values (`--energy` in eV, `--semiangle`, `--angular-sampling`,
+  `--scan-sampling`, `--scan`, `--defocus`, `--rotation`) have no defaults: a run
+  without one stops and lists what is missing. `--center` (the disk centre, px on a raw frame)
+  defaults to the frame center. The bright-field disk's radius is not an input; the
+  run prints it (semiangle ÷ angular sampling) to compare with a frame. Keep them in a file and pass `$(cat site.flags)`.
 - `--scan` must match the scan.
 - `--defocus`, `--rotation` and `--center` set the sharpness; tune them on a recorded scan
   (`tools/record_stream.py`, see the guide).

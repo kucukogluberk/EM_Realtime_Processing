@@ -129,16 +129,41 @@ bitshuffle and dectris-compression, in a host environment; the image does not ca
 
 ## Live usage (against a detector)
 
+Two values come from the site, not from this repository: the DCU's stream address (the IP of its
+data interface on the network to this machine; it can differ from the address of the DCU's web
+page) and the GPU (its number in `nvidia-smi -L`). Check both first:
+`GPU=<N> DCU=<DCU_IP> scripts/check_install.sh`.
+
+The DCU must be set up for the stream: stream `enabled`, format `cbor`, compression `bslz4`,
+binning `2x2` for `--binned`, trigger mode `exts` (one trigger per frame from the scan
+generator), `ntrigger` = Ny×Nx and `nimages` = 1. `tools/detector_setup.py` checks and sets these
+over the DCU's REST API (standard library only):
+
+| step | command | what it does |
+|---|---|---|
+| check | `python -m tools.detector_setup check --ip <DCU_IP> --scan 256 256 --binned` | compares the settings, changes nothing; prints the matching `run.py` flags |
+| apply | `… apply --ip <DCU_IP> --scan 256 256 --binned --frame-time 8.334e-6` | sets what differs (frame time = the scan generator's dwell time) |
+| arm | `… arm --ip <DCU_IP>` | arms; start the pipeline first, the series' `start` message is sent now |
+| disarm | `… disarm --ip <DCU_IP>` | ends the series (the pipeline then reports `COMPLETE`) and shows the DCU's dropped frames |
+| scan | `… scan --ip <DCU_IP> --scan 256 256 --binned` | arm, `start_scan()`, disarm |
+
+The scan generator is not driven by this repository. `start_scan()` in `tools/detector_setup.py`
+is an empty slot, with pseudo-code, for a site's own code; until it is filled in, `scan` asks you
+to start the scan by hand and disarms when you press Enter. `--ip` is the DCU's REST address,
+which can differ from the stream address used for `--endpoint`. Settings missing on a DCU model
+are skipped; `--api` sets the SIMPLON API version if the DCU does not report it.
+
 Run the pipeline inside the container, pointing it at the DCU's ZMQ stream:
 
 ```bash
-docker run --rm --network host --gpus all --ulimit stack=33554432:33554432 \
+docker run --rm --network host --gpus "device=<N>" --ulimit stack=33554432:33554432 \
   -v "$PWD":/work -v "$PWD/out":/out -w /work --entrypoint python3 \
   realtime-stem:latest -m realtime_stem.apps.run \
     --algorithm parallax \
     --endpoint tcp://<DCU_IP>:31001 \
     --binned --scan 256 256 --batch-size 2048 --n-connections 3 \
-    --defocus <Å> --rotation <degrees> --upsampling 2 \
+    --energy <eV> --semiangle <mrad> --angular-sampling <mrad/px> --scan-sampling <Å> \
+    --defocus <Å> --rotation <degrees> --center <row> <col> --upsampling 2 \
     --live-endpoint tcp://127.0.0.1:5601 --continuous
 ```
 
@@ -157,6 +182,17 @@ all flags; the
 parallax tuning knobs (`--defocus`, `--rotation`, `--energy`, `--semiangle`, `--angular-sampling`,
 `--scan-sampling`, `--center`, …) use the same units live as offline.
 
+None of the acquisition values comes from the stream, and they have no defaults: `--energy` (eV,
+300 kV = 300000), `--semiangle` (mrad), `--angular-sampling` (mrad/px of the mode running, e.g.
+2 × semiangle ÷ the bright-field disk's diameter in pixels), `--scan-sampling` (Å per step),
+`--scan`, `--defocus` and `--rotation`. A run without one of them stops before it starts and lists
+the missing ones; a default that is silently wrong would give a plausible but wrong image.
+`--center` (the disk centre in pixels on a raw frame) defaults to the frame center.
+Keep a session's values in a file and pass them as `$(cat site.flags)`. The disk's radius in
+pixels is not an input: it follows from `--semiangle` ÷ `--angular-sampling`, and the run prints it
+at start-up to compare with the disk on a frame. If part of the disk falls outside the frame
+(wrong centre or sampling), the run warns and says how many pixels it leaves out.
+
 Three parameters decide whether the image is sharp, and none of them comes from the stream:
 `--defocus` (C10 in Å, the microscope's readout is the starting point), `--rotation` (the
 scan-to-detector rotation in degrees) and `--center` (the bright-field disk's centre on the
@@ -173,7 +209,8 @@ python3 tools/record_stream.py capture --ip <DCU_IP> --out scan01.dstream
 ```
 
 and start the scan. The recorder (host Python with `pyzmq` and `cbor2`) stops by itself at the
-end of the scan and reports whether every frame arrived (`COMPLETE`). Replay it into the pipeline
+end of the scan and reports whether every frame arrived (`COMPLETE`). It warns when nothing
+accepts connections at the address (`WARNING: cannot reach …`). Replay it into the pipeline
 with `tools/replay_to_zmq.py`; keep the microscope settings of each recording next to it.
 
 ## Running without the container
@@ -226,11 +263,21 @@ runner exits) reaches connected subscribers rather than being dropped with the q
 
 ## Live channels (readout)
 
-The hot path only deposits shifted, frame-mean-subtracted bright-field values into one buffer,
-plus two small side accumulators: the visits per scan position and each BF pixel's running sum (an
+The hot path only deposits shifted bright-field values into one buffer, plus two small side
+accumulators: the visits per scan position and each BF pixel's running sum (an
 O(B·M) add per batch, 2–7% of `process()`). Everything linear and shift-invariant over the scan is
 applied to the accumulated sum when a snapshot is taken (`processing/parallax/readout.py`), so it
-costs nothing per frame:
+costs nothing per frame.
+
+**The frame mean.** By default each frame's bright-field values are added in as they are.
+`--subtract-frame-mean` subtracts each frame's mean over its bright-field pixels first, as the
+reference implementation does. That mean is the bright-field intensity at the scan position, so
+subtracting it removes the amplitude contrast (mass-thickness, diffraction contrast) over regions
+larger than about the probe, together with frame-to-frame changes in beam intensity. On a recorded
+ARINA scan (256×256, largest shift 6 px) it removed nearly all of the image's power below 6 cycles
+per field of view and 40% between 12 and 24, and lowered the image's standard deviation by a
+quarter; detail finer than that is unchanged. Use it when only the phase contrast is wanted, or
+when the beam intensity drifts during the scan.
 
 | channel / flag | what it is |
 |---|---|
@@ -253,10 +300,10 @@ Why each is exact:
   overflow into the next row (a ~120% error on the apoferritin data); the readout wraps each axis.
 - **Per-BF scan-mean removal** (quantem's `_preprocess`). Subtracting each BF pixel's mean from
   all its deposits is a convolution of the comb of position visits with the means placed at their
-  shifts, so it is applied at readout. With the per-frame mean the hot path already removes, this
-  is double-centering. On a complete, unupsampled wrap it changes nothing (every output pixel
-  receives each BF pixel once, and the means sum to zero), but on apoferritin it changes a half
-  scan by 22% (25–37% next to the scan front, where the static BF pattern piles up) and a complete
+  shifts, so it is applied at readout. Together with `--subtract-frame-mean` this is
+  double-centering. On a complete, unupsampled wrap it only removes a constant (every output pixel
+  receives each BF pixel once); the amplitude contrast stays. With the frame mean subtracted, on
+  apoferritin it changes a half scan by 22% (25–37% next to the scan front, where the static BF pattern piles up) and a complete
   upsampling-2 scan by 10% (removing 42% of its Nyquist power).
 - **Coverage** is the comb convolved with the shift histogram.
 
@@ -303,7 +350,8 @@ That needs `--accumulate latest`:
 
 ```bash
 python -m realtime_stem.apps.run --accumulate latest --scan 256 256 --binned \
-    --defocus=<Å> --rotation <degrees> --lowpass 0.1 --live-every-rows 32 \
+    --energy <eV> --semiangle <mrad> --angular-sampling <mrad/px> --scan-sampling <Å> \
+    --defocus=<Å> --rotation <degrees> --center <row> <col> --lowpass 0.1 --live-every-rows 32 \
     --endpoint tcp://<DCU_IP>:31001 --n-connections 3 --live-endpoint tcp://0.0.0.0:5601
 ```
 
@@ -452,6 +500,17 @@ issues). For the end-to-end rate on a given machine, replay a recording with
 
 ## Known issues and limitations
 
+- **A wrong DCU address looks like waiting for the scan.** ZeroMQ connects lazily and retries
+  forever, so the pipeline and the recorder cannot fail on a wrong address. Both print
+  `WARNING: cannot reach <ip>:<port>` at start-up and every 30 s until it answers.
+  `DCU=<DCU_IP> scripts/check_install.sh` tells a wrong address (no answer to ping) from a
+  closed stream port.
+- **Which GPU.** `--gpus "device=N"` gives the container exactly that GPU, numbered as in
+  `nvidia-smi`. With `--gpus all` on a machine with several GPUs the pipeline takes the first in
+  CUDA's order, which can differ from nvidia-smi's; it then prints a warning. At start-up the run
+  prints the GPU it uses (`[run] GPU: <name>, PCI bus <bus>`, the bus as in nvidia-smi's Bus-Id),
+  and a note when other programs already hold much of its memory.
+
 - **The run reports whether the scan is complete.** After every scan: `[sink] COMPLETE: all N
   scan positions received`, or `WARNING: INCOMPLETE SCAN: … (k missing, d frames for positions
   that already had one)`. The result is saved either way. Causes of an incomplete scan: a second
@@ -550,7 +609,8 @@ realtime_stem/
   streaming/notebook.py        LiveView: the Jupyter subscriber
   apps/run.py                  the runner (transport flags + continuous/rounds loop)
 tools/                         .dstream CLI, stream recorders, replay feeder, npy→.dstream, 4D-STEM
-                               simulator (incl. multi-pass focus walks), synthetic-capture generator
+                               simulator (incl. multi-pass focus walks), synthetic-capture generator,
+                               DCU setup (detector_setup.py)
 scripts/                       machine check, replay demos (Docker / local), accumulator benchmark,
                                CLI-reference generator
 examples/                      viewer, notebook (live_view.ipynb), headless probe, static result plot

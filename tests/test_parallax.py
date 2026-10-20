@@ -4,7 +4,8 @@ Tests for the parallax / tcBF engine.
 The oracle is direct math: a faithful **float64 NumPy transcription of Georgios Varnavides's
 streaming-parallax reference** — `preprocess_geometry` (BF indices + integer parallax shifts) and
 `parallax_accumulate_cpu` (the per-frame gather → mean-subtract → toroidal shifted scatter-add).
-"Engine == oracle" therefore literally means "the equations were ported correctly."
+"Engine == oracle" therefore literally means "the equations were ported correctly." The engine
+keeps the frame mean by default; the oracle drops its mean-subtract step for that case.
 
 Checks:
   • Geometry: our `preprocess_geometry` bf-indices and integer shifts match the reference exactly
@@ -12,9 +13,10 @@ Checks:
     probe.
   • Accumulation: the batched-torch `ParallaxAccumulator` reconstruction matches the reference
     float64 loop on synthetic frames — arbitrary id order, split across process() calls, for
-    uint8/uint16/uint32; upsampling; toroidal wrap.
+    uint8/uint16/uint32; upsampling; toroidal wrap; with and without the frame mean.
   • Analytic (physics, transcription-independent): pure-defocus shifts are radial and scale
-    linearly with C10; zero aberration → the mean-subtracted contributions cancel → zero output.
+    linearly with C10; zero aberration → the mean-subtracted contributions cancel → zero output,
+    and with the mean kept the in-focus image is the virtual bright-field image.
   • Contract/CLI: device-tensor input (Holoscan DLPack path) == ndarray input; the `Accumulator`
     protocol holds; the tuning-knob CLI maps to the config with the right units; GPU == CPU.
 
@@ -31,6 +33,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -109,8 +112,9 @@ def _reference_geometry(det_shape, scan_sampling, energy, semiangle_cutoff, angu
     return bf_flat_inds, shifts
 
 
-def _reference_accumulate(frames, bf_flat_inds, shifts, coords, out_shape):
-    """The reference parallax_accumulate_cpu, pure float64 (no numba). Returns out (Ny, Nx)."""
+def _reference_accumulate(frames, bf_flat_inds, shifts, coords, out_shape, subtract_mean=True):
+    """The reference parallax_accumulate_cpu, pure float64 (no numba). Returns out (Ny, Nx).
+    `subtract_mean=False` leaves out its per-frame mean (the engine's default)."""
     out = np.zeros(out_shape, dtype=np.float64)
     T = frames.shape[0]
     M = shifts.shape[0]
@@ -124,7 +128,7 @@ def _reference_accumulate(frames, bf_flat_inds, shifts, coords, out_shape):
         for m in range(M):
             fi = bf_flat_inds[m]
             mean += frame[fi // sx, fi % sx]
-        mean /= M
+        mean = mean / M if subtract_mean else 0.0
         for m in range(M):
             fi = bf_flat_inds[m]
             val = frame[fi // sx, fi % sx] - mean
@@ -197,7 +201,8 @@ def test_geometry_matches_reference():
 
 # ── accumulation: batched torch == reference float64 loop ──────────────────────
 
-def test_accumulate_matches_reference():
+@pytest.mark.parametrize("subtract", [True, False])
+def test_accumulate_matches_reference(subtract):
     """Synthetic frames, arbitrary id order, split across two process() calls — all dtypes."""
     rng = np.random.default_rng(0)
     scan_shape = (12, 12)
@@ -217,19 +222,20 @@ def test_accumulate_matches_reference():
     for dtype, hi in [(np.uint32, 100000), (np.uint16, 60000), (np.uint8, 255)]:
         frames = rng.integers(0, hi, size=(n, *_GEO["det_shape"]), dtype=dtype)
 
-        acc = ParallaxAccumulator(geom, device="cpu")
+        acc = ParallaxAccumulator(geom, device="cpu", subtract_frame_mean=subtract)
         acc.process(frames[:40], ids[:40])           # two calls → tests accumulation
         acc.process(frames[40:], ids[40:])
         got = acc.result()
 
-        exp = _reference_accumulate(frames, bf, shifts, coords, scan_shape)
+        exp = _reference_accumulate(frames, bf, shifts, coords, scan_shape, subtract)
         scale = max(np.abs(exp).max(), 1.0)
         assert np.allclose(got, exp, rtol=1e-4, atol=1e-4 * scale), (
             dtype, np.abs(got - exp).max(), scale)
     print("test_accumulate_matches_reference: PASS (uint32/uint16/uint8, arbitrary ids, 2 calls)")
 
 
-def test_accumulate_upsampled_matches_reference():
+@pytest.mark.parametrize("subtract", [True, False])
+def test_accumulate_upsampled_matches_reference(subtract):
     """upsampling_factor>1 (finer output grid) must still match the reference loop."""
     rng = np.random.default_rng(3)
     scan_shape = (10, 10)
@@ -245,11 +251,11 @@ def test_accumulate_upsampled_matches_reference():
     coords = _coords(ids, scan_shape[1], u)
     frames = rng.integers(0, 60000, size=(n, *_GEO["det_shape"]), dtype=np.uint16)
 
-    acc = ParallaxAccumulator(geo, device="cpu")
+    acc = ParallaxAccumulator(geo, device="cpu", subtract_frame_mean=subtract)
     acc.process(frames, ids)
     got = acc.result()
     exp = _reference_accumulate(frames, geo.bf_flat_inds, geo.shifts, coords,
-                                geo.upsampled_scan_gpts)
+                                geo.upsampled_scan_gpts, subtract)
     assert got.shape == geo.upsampled_scan_gpts == (scan_shape[0] * u, scan_shape[1] * u)
     scale = max(np.abs(exp).max(), 1.0)
     assert np.allclose(got, exp, rtol=1e-4, atol=1e-4 * scale), np.abs(got - exp).max()
@@ -271,12 +277,34 @@ def test_zero_aberration_cancels_to_zero():
     rng = np.random.default_rng(4)
     ids = np.arange(12 * 12)
     frames = rng.integers(0, 255, size=(len(ids), *_GEO["det_shape"]), dtype=np.uint8)
-    acc = ParallaxAccumulator(geo, device="cpu")
+    acc = ParallaxAccumulator(geo, device="cpu", subtract_frame_mean=True)
     acc.process(frames, ids)
     recon = acc.result()
     assert np.isfinite(recon).all()
     assert np.abs(recon).max() < 1e-1, f"DC removal should cancel in-focus recon, got {np.abs(recon).max()}"
+
+    # Mean kept (the default): in focus, every BF pixel lands on its own scan position, so the
+    # image is the virtual bright-field image (the BF disk's counts per position).
+    kept = ParallaxAccumulator(geo, device="cpu")
+    kept.process(frames, ids)
+    vbf = frames.reshape(len(ids), -1)[:, geo.bf_flat_inds].sum(1).astype(np.float64)
+    assert np.allclose(kept.result().ravel(), vbf, rtol=1e-6)
     print("test_zero_aberration_cancels_to_zero: PASS (in-focus → ~zero via DC removal)")
+
+
+def test_frame_mean_is_kept_by_default():
+    """No silent per-frame mean subtraction: it removes the amplitude contrast, so it is opt-in.
+    A uniformly brighter frame raises the image; with the subtraction it changes nothing."""
+    geo = _defocus_geo(-1.5e4)
+    frames = np.full((4, *_GEO["det_shape"]), 10, dtype=np.uint16)
+    ids = np.arange(4)
+    default = ParallaxAccumulator(geo, device="cpu")
+    assert not default.subtract_frame_mean
+    default.process(frames, ids)
+    assert default.result().sum() == pytest.approx(4 * 10 * geo.n_bf)
+    sub = ParallaxAccumulator(geo, device="cpu", subtract_frame_mean=True)
+    sub.process(frames, ids)
+    assert np.abs(sub.result()).max() < 1e-4
 
 
 def test_defocus_shifts_radial_and_scaling():
@@ -363,7 +391,7 @@ def test_toroidal_wrap():
     frame = np.zeros((1, h, w), dtype=np.uint16)
     frame[0, 2, 2] = 12                                        # first BF pixel hot
     ids = np.array([1 * 5 + 4])                                # scan (yt=1, xt=4) → x wraps too
-    acc = ParallaxAccumulator(geo, device="cpu")
+    acc = ParallaxAccumulator(geo, device="cpu", subtract_frame_mean=True)
     acc.process(frame, ids)
     recon = acc.result()
 
@@ -473,20 +501,20 @@ def test_shape_guard():
     print("test_shape_guard: PASS")
 
 
-def test_keep_bf_mean_keeps_amplitude_contrast():
+def test_kept_frame_mean_keeps_amplitude_contrast():
     """A pure amplitude object (every BF pixel sees the same image) cancels exactly under the
-    per-frame mean removal, and survives as the shifted BF sum with keep_bf_mean."""
+    per-frame mean removal, and survives as the shifted BF sum when the mean is kept (default)."""
     geo = _defocus_geo(-1.5e4)
     rng = np.random.default_rng(0)
     amplitude = rng.integers(50, 200, size=144)                    # one level per scan position
     frames = np.broadcast_to(amplitude[:, None, None], (144, 32, 32)).astype(np.uint32)
     ids = np.arange(144)
 
-    removed = ParallaxAccumulator(geo, device="cpu")
+    removed = ParallaxAccumulator(geo, device="cpu", subtract_frame_mean=True)
     removed.process(frames, ids)
     assert np.abs(removed.result()).max() < 1e-3
 
-    kept = ParallaxAccumulator(geo, device="cpu", keep_bf_mean=True)
+    kept = ParallaxAccumulator(geo, device="cpu")
     kept.process(frames, ids)
     # each scan position deposits its level at every BF pixel's shifted output position
     expected = np.zeros(144)
@@ -494,7 +522,7 @@ def test_keep_bf_mean_keeps_amplitude_contrast():
     ox = (ids[:, None] % 12 + geo.shifts[None, :, 1]) % 12
     np.add.at(expected, (oy * 12 + ox).ravel(), np.repeat(amplitude.astype(float), geo.n_bf))
     np.testing.assert_allclose(kept.result().ravel(), expected, rtol=1e-5)
-    print("test_keep_bf_mean_keeps_amplitude_contrast: PASS")
+    print("test_kept_frame_mean_keeps_amplitude_contrast: PASS")
 
 
 def test_accumulator_satisfies_protocol():
@@ -607,7 +635,7 @@ if __name__ == "__main__":
     test_uint16_torch_tensor_high_values_exact()
     test_uint32_high_values_exact()
     test_shape_guard()
-    test_keep_bf_mean_keeps_amplitude_contrast()
+    test_kept_frame_mean_keeps_amplitude_contrast()
     test_accumulator_satisfies_protocol()
     test_registry_has_parallax()
     test_cli_config_overrides()

@@ -8,7 +8,9 @@ Oracles, all float64 NumPy transcriptions:
     `% (Ny*Nx)` instead, which carries a column overflow into the next row; that variant is checked
     to differ, so the test documents the bug rather than inheriting it.
   • per-BF scan-mean removal: subtract each BF pixel's mean over the frames seen so far from every
-    deposit (quantem's `_preprocess`, double-centered with the per-frame mean).
+    deposit (quantem's `_preprocess`; double-centered when the per-frame mean is subtracted too).
+
+The phase flip and the scan-mean removal are checked with and without `subtract_frame_mean`.
   • coverage: count the deposits landing on each output pixel.
 
 Each is checked mid-scan (the live case) and on a complete scan, at upsampling 1 and 2.
@@ -47,10 +49,10 @@ def _frames(n, seed=0):
     return rng.integers(0, 60000, size=(n, 32, 32), dtype=np.uint16)
 
 
-def _bf_values(frames, geo):
-    """(T, M) frame-mean-subtracted BF values, float64."""
+def _bf_values(frames, geo, subtract_frame_mean=False):
+    """(T, M) BF values as deposited, float64 (minus each frame's mean if asked)."""
     v = frames.reshape(len(frames), -1)[:, geo.bf_flat_inds].astype(np.float64)
-    return v - v.mean(axis=1, keepdims=True)
+    return v - v.mean(axis=1, keepdims=True) if subtract_frame_mean else v
 
 
 def _deposit(values, ids, geo):
@@ -65,7 +67,7 @@ def _deposit(values, ids, geo):
     return out
 
 
-def _reference_phase_flip(frames, ids, geo, flat_wrap=False):
+def _reference_phase_flip(frames, ids, geo, flat_wrap=False, subtract_frame_mean=False):
     """The streaming reference's grouped phase-flip kernel, scattered frame by frame."""
     nyu, nxu = geo.upsampled_scan_gpts
     sy, sx = geo.upsampled_scan_sampling
@@ -93,7 +95,7 @@ def _reference_phase_flip(frames, ids, geo, flat_wrap=False):
     out = np.zeros((nyu, nxu))
     u = geo.upsampling_factor
     for t, idx in enumerate(ids):
-        vals = grouped @ _bf_values(frames[t:t + 1], geo)[0]
+        vals = grouped @ _bf_values(frames[t:t + 1], geo, subtract_frame_mean)[0]
         yt, xt = (idx // _SCAN[1]) * u, (idx % _SCAN[1]) * u
         if flat_wrap:   # the reference: flat index wrap, a column overflow carries into the next row
             np.add.at(out.reshape(-1), (yt * nxu + xt + unique_offsets) % (nyu * nxu), vals)
@@ -102,8 +104,9 @@ def _reference_phase_flip(frames, ids, geo, flat_wrap=False):
     return out
 
 
-def _accumulate(frames, ids, geo, device, **readout):
-    acc = ParallaxAccumulator(geo, device=device, readout=ReadoutConfig(**readout))
+def _accumulate(frames, ids, geo, device, subtract_frame_mean=False, **readout):
+    acc = ParallaxAccumulator(geo, device=device, readout=ReadoutConfig(**readout),
+                              subtract_frame_mean=subtract_frame_mean)
     acc.process(frames, ids)
     return acc
 
@@ -111,47 +114,54 @@ def _accumulate(frames, ids, geo, device, **readout):
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("upsampling_factor", [1, 2])
 @pytest.mark.parametrize("n_frames", [37, 120])          # mid-scan, complete scan
-def test_phase_flip_matches_streamed_grouped_kernel(device, upsampling_factor, n_frames):
+@pytest.mark.parametrize("subtract", [False, True])
+def test_phase_flip_matches_streamed_grouped_kernel(device, upsampling_factor, n_frames, subtract):
     geo = _geometry(upsampling_factor)
     frames = _frames(n_frames)
     ids = np.arange(n_frames)
-    acc = _accumulate(frames, ids, geo, device, dc_correct=False, suppress_nyquist=True)
+    acc = _accumulate(frames, ids, geo, device, subtract_frame_mean=subtract, dc_correct=False,
+                      suppress_nyquist=True)
     got = acc.channels()["phase_flipped"].cpu().numpy()
 
-    exp = _reference_phase_flip(frames, ids, geo)
+    exp = _reference_phase_flip(frames, ids, geo, subtract_frame_mean=subtract)
     scale = np.abs(exp).max()
     assert np.allclose(got, exp, atol=2e-4 * scale), np.abs(got - exp).max() / scale
 
     # the reference's flat wrap is a different (wrong) operator, not a rounding difference
-    buggy = _reference_phase_flip(frames, ids, geo, flat_wrap=True)
+    buggy = _reference_phase_flip(frames, ids, geo, flat_wrap=True, subtract_frame_mean=subtract)
     assert np.abs(buggy - exp).max() > 0.1 * scale
 
 
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("upsampling_factor", [1, 2])
 @pytest.mark.parametrize("n_frames", [37, 120])
-def test_dc_correction_matches_double_centering(device, upsampling_factor, n_frames):
+@pytest.mark.parametrize("subtract", [False, True])
+def test_dc_correction_matches_double_centering(device, upsampling_factor, n_frames, subtract):
     geo = _geometry(upsampling_factor)
     frames = _frames(n_frames, seed=1)
     ids = np.random.default_rng(2).permutation(np.prod(_SCAN))[:n_frames]   # any arrival order
-    acc = ParallaxAccumulator(geo, device=device,
+    acc = ParallaxAccumulator(geo, device=device, subtract_frame_mean=subtract,
                               readout=ReadoutConfig(phase_flip=False, suppress_nyquist=False))
     acc.process(frames[: n_frames // 2], ids[: n_frames // 2])            # two batches
     acc.process(frames[n_frames // 2:], ids[n_frames // 2:])
     got = acc.channels()["parallax"].cpu().numpy()
 
-    v = _bf_values(frames, geo)
+    v = _bf_values(frames, geo, subtract)
     exp = _deposit(v - v.mean(axis=0, keepdims=True), ids, geo)
-    scale = np.abs(exp).max()
-    assert np.allclose(got, exp, atol=2e-4 * scale), np.abs(got - exp).max() / scale
-
     raw = acc.result()
+    # float32 sums of the raw deposits: the error scales with the raw image, not the result
+    tol = 2e-4 * np.abs(exp).max() + 2e-6 * np.abs(raw).max()
+    assert np.allclose(got, exp, atol=tol), np.abs(got - exp).max()
+
+    diff = raw - exp
     if upsampling_factor == 1 and n_frames == np.prod(_SCAN):
-        # complete, unupsampled wrap: each output pixel receives every BF pixel once and the
-        # per-pixel means sum to zero, so the correction is a no-op
-        assert np.allclose(raw, exp, atol=2e-4 * scale)
+        # complete, unupsampled wrap: each output pixel receives every BF pixel once, so the
+        # correction only removes a constant (zero when the frame mean is subtracted too)
+        assert np.allclose(diff, diff.mean(), atol=tol)
+        if subtract:
+            assert abs(diff.mean()) < tol
     else:
-        assert np.abs(raw - exp).max() > 1e-2 * scale
+        assert np.abs(diff - diff.mean()).max() > 1e-2 * np.abs(exp).max()
 
 
 @pytest.mark.parametrize("device", DEVICES)

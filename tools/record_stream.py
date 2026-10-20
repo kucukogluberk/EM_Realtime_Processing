@@ -17,6 +17,7 @@ File format: 8 bytes `DSTREAM1`, then records [uint32 little-endian length][raw 
 from __future__ import annotations
 
 import argparse
+import socket
 import time
 from pathlib import Path
 
@@ -40,6 +41,16 @@ def envelope_type(raw: bytes):
     return msg.get("type") if hasattr(msg, "get") else None
 
 
+def reachable(ip: str, port: int, timeout: float = 2.0) -> str | None:
+    """None when something accepts TCP connections at ip:port, else the reason. A plain TCP
+    connection without the ZeroMQ handshake, so the DCU never counts it as a reader."""
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return None
+    except OSError as exc:
+        return str(exc)
+
+
 def capture(ip: str, port: int, out_path, max_frames: int | None = None,
             n_connections: int = 3, drain_quiet_ms: int = 1000) -> None:
     """Record one series. The DCU paces each connection (about 60k binned frames/s), so 120 kHz
@@ -60,6 +71,12 @@ def capture(ip: str, port: int, out_path, max_frames: int | None = None,
 
     print(f"[record] tcp://{ip}:{port} x{n_connections} -> {out_path}")
     print("[record] waiting for 'start' ... start the scan now (Ctrl-C to stop).")
+    unreachable = reachable(ip, port)
+    if unreachable:
+        print(f"[record] WARNING: cannot reach {ip}:{port} ({unreachable}). Nothing can be "
+              f"recorded until this is fixed: check the DCU address and port, and that its stream "
+              f"interface is enabled. Still trying; Ctrl-C stops.")
+    last_check = time.perf_counter()
 
     n_msgs = n_img = nbytes = 0
     started = False
@@ -89,6 +106,11 @@ def capture(ip: str, port: int, out_path, max_frames: int | None = None,
             while not done:
                 events = dict(poller.poll(timeout=500))
                 if not events:
+                    if unreachable and time.perf_counter() - last_check >= 30:
+                        last_check = time.perf_counter()
+                        unreachable = reachable(ip, port)
+                        print(f"[record] {ip}:{port} is reachable now." if not unreachable else
+                              f"[record] WARNING: still cannot reach {ip}:{port}.")
                     if end_raw is not None and (time.perf_counter() - last_msg) * 1000 >= drain_quiet_ms:
                         break
                     continue
