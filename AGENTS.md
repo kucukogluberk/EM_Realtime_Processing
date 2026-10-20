@@ -9,8 +9,10 @@ A real-time STEM reconstruction pipeline. A DECTRIS ARINA detector's control uni
 streams compressed frames over ZeroMQ; the pipeline receives them, decompresses them on an NVIDIA
 GPU, folds them into a parallax / tcBF image while the scan runs, and publishes the image so far
 (parallax and phase-flipped) for a live viewer or notebook. A pure-Python ingest runs the same
-processing on CPU or Apple `mps`, without Docker, from a stream or a recording. It only **reads**
-the DCU's stream: it never configures the detector, the DCU or the microscope.
+processing on CPU or Apple `mps`, without Docker, from a stream or a recording. The pipeline only
+**reads** the DCU's stream. The one exception is the helper `tools/detector_setup.py`, which sets
+up and arms the DCU when the user runs it. Nothing here drives the scan generator or the
+microscope.
 
 ## Where is what
 
@@ -31,8 +33,9 @@ Three stages, each changeable on its own:
   `algorithm.py` (CLI wiring and saving results).
 - `tools/`: the `.dstream` recording format, a stream recorder (`record_stream.py`, host Python
   with pyzmq + cbor2; stop the pipeline while it records), a replay feeder (`replay_to_zmq.py`),
-  a 4D-STEM simulator (`simulate_4dstem.py`), recording converters/generators, and
-  `check_gpu_copies.py` (a hardware check).
+  a 4D-STEM simulator (`simulate_4dstem.py`), recording converters/generators,
+  `check_gpu_copies.py` (a hardware check) and `detector_setup.py` (the DCU's settings over its
+  REST API: `check`, `apply`, `arm`, `disarm`, `scan`; standard library only).
 - `scripts/check_install.sh`: the step-by-step machine check (DCU reachability and link speed,
   GPU, image, GPU copies, replays). `scripts/run_replay_demo.sh`: the no-detector demo.
 - `docker/Dockerfile`: builds the image (NVIDIA's pinned Holoscan base + the compiled operators).
@@ -67,8 +70,33 @@ compare it with the user's choice.
 
 Do not wait on a silent command. If the pipeline or the recorder prints `cannot reach`, or
 nothing arrives within a minute of the user starting a scan, stop and check the address, the
-port, the GPU and `docker ps` (a leftover container) with the user. The scan itself, arming the
-detector and any DCU setting are the user's: ask them to do it, and never do it from here.
+port, the GPU and `docker ps` (a leftover container) with the user.
+
+## The detector's settings (`tools/detector_setup.py`)
+
+The pipeline needs the DCU set up as follows: stream `enabled`, format `cbor`, compression
+`bslz4`, binning `2x2` for `--binned`, trigger mode `exts`, `ntrigger` = Ny×Nx, `nimages` = 1.
+The helper checks and sets exactly these:
+
+```bash
+python -m tools.detector_setup check  --ip <DCU_IP> --scan 256 256 --binned   # read only
+python -m tools.detector_setup apply  --ip <DCU_IP> --scan 256 256 --binned --frame-time 8.334e-6
+python -m tools.detector_setup arm    --ip <DCU_IP>     # after the pipeline has started
+python -m tools.detector_setup disarm --ip <DCU_IP>     # after the scan: ends the series
+python -m tools.detector_setup scan   --ip <DCU_IP> --scan 256 256 --binned   # arm, scan, disarm
+```
+
+- `check` only reads, so you may run it to diagnose. It ends with the matching `run.py` flags
+  (`--scan`, `--binned`, `--dtype`).
+- `apply`, `arm`, `disarm` and `scan` change the detector: run them only when the user asks for
+  that specific run, or let the user run them.
+- `--ip` is the DCU's REST address; the stream address (`run.py --endpoint`) can be another
+  interface of the DCU.
+- Order for every scan: pipeline running → arm → scan → disarm. The DCU sends the series' `start`
+  message at arm and its `end` at disarm.
+- The scan generator is site-specific and not part of this repository. `start_scan()` in the
+  helper is an empty slot (pseudo-code only) for the site's own code; until it is filled in,
+  `scan` asks the user to start the scan by hand. Never start a scan or move the beam from here.
 
 ## Checking a change
 

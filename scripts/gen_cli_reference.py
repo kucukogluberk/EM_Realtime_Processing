@@ -57,6 +57,9 @@ INTROS = {
     "tools.make_dstream": "Synthetic random-count capture for format tests (no physics; needs "
                           "the `decode` extra).",
     "tools.dstream": "Inspect a `.dstream` capture.",
+    "tools.detector_setup": "Set up the DCU for the pipeline over its REST API: `check` (read "
+                            "only), `apply`, `arm`, `disarm`, and `scan` (arm, your "
+                            "`start_scan`, disarm). Never drives the scan generator.",
     "examples.viewer": "Desktop live viewer: one panel per channel of the live stream.",
     "examples.probe": "Headless subscriber: report live frames, optionally save the last one.",
     "examples.plot_result": "Plot a saved reconstruction `.npy`.",
@@ -71,6 +74,7 @@ SHORT = {
     "tools.npy_to_dstream": "convert a 4D `.npy` into a capture",
     "tools.make_dstream": "synthetic random capture (format tests)",
     "tools.dstream": "inspect a capture",
+    "tools.detector_setup": "set up, arm and disarm the DCU",
     "examples.viewer": "desktop live viewer",
     "examples.probe": "headless live-stream probe",
     "examples.plot_result": "plot a saved result",
@@ -84,7 +88,7 @@ def _parsers():
 
     out = [("run", run.build_parser(registry.get("parallax")))]
     for mod in ("tools.simulate_4dstem", "tools.replay_to_zmq", "tools.record_dstream",
-                "tools.npy_to_dstream", "tools.make_dstream", "tools.dstream",
+                "tools.npy_to_dstream", "tools.make_dstream", "tools.dstream", "tools.detector_setup",
                 "examples.viewer", "examples.probe", "examples.plot_result"):
         out.append((mod, importlib.import_module(mod).build_parser()))
     spec = importlib.util.spec_from_file_location(

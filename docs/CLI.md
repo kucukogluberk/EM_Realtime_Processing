@@ -16,6 +16,7 @@ changed recently, [CHANGELOG.md](../CHANGELOG.md).
 | [`python -m tools.npy_to_dstream`](#python--m-toolsnpy_to_dstream) | convert a 4D `.npy` into a capture |
 | [`python -m tools.make_dstream`](#python--m-toolsmake_dstream) | synthetic random capture (format tests) |
 | [`python -m tools.dstream`](#python--m-toolsdstream) | inspect a capture |
+| [`python -m tools.detector_setup`](#python--m-toolsdetector_setup) | set up, arm and disarm the DCU |
 | [`python examples/viewer.py`](#python-examplesviewerpy) | desktop live viewer |
 | [`python examples/probe.py`](#python-examplesprobepy) | headless live-stream probe |
 | [`python examples/plot_result.py`](#python-examplesplot_resultpy) | plot a saved result |
@@ -276,6 +277,36 @@ usage: python -m tools.dstream [-h] {info} ...
 | parameter | default | description |
 |---|---|---|
 | `file` | required | The .dstream capture. |
+
+## `python -m tools.detector_setup`
+
+Set up the DCU for the pipeline over its REST API: `check` (read only), `apply`, `arm`, `disarm`, and `scan` (arm, your `start_scan`, disarm). Never drives the scan generator.
+
+```text
+usage: python -m tools.detector_setup [-h] --ip IP [--http-port HTTP_PORT] [--api API]
+                                      [--scan NY NX] [--binned] [--frame-time FRAME_TIME]
+                                      [--trigger-mode TRIGGER_MODE] [--keep-filewriter]
+                                      {check,apply,arm,disarm,scan}
+```
+
+**arguments**
+
+| parameter | default | description |
+|---|---|---|
+| `step {check,apply,arm,disarm,scan}` | required | check: compare the settings (read only); apply: set what differs; arm; disarm: end the series; scan: arm, start_scan, disarm. |
+
+**general**
+
+| parameter | default | description |
+|---|---|---|
+| `--ip IP` | required | Address of the DCU's REST API. |
+| `--http-port HTTP_PORT` | `80` | Port of the REST API. |
+| `--api API` |  | SIMPLON API version, e.g. 1.8.0 (default: asked from the DCU). |
+| `--scan NY NX` |  | Scan positions, as given to run.py --scan (check, apply, scan). |
+| `--binned` | flag | 2x2 binning (96x96 frames). |
+| `--frame-time FRAME_TIME` |  | Seconds per frame, the scan generator's dwell time (e.g. 8.334e-6 = 120 kHz). Default: leave the DCU's as it is. |
+| `--trigger-mode TRIGGER_MODE` | `exts` | exts = one external trigger per frame, from the scan generator. |
+| `--keep-filewriter` | flag | Leave the DCU's file writer as it is (default: disabled, live only). |
 
 ## `python examples/viewer.py`
 

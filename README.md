@@ -25,7 +25,7 @@ realtime_stem/        the Python package
 operators/            the C++/CUDA frame receiver and GPU decompressor
 docker/Dockerfile     builds the Docker image
 examples/             live viewer, notebook, sample recording
-tools/                stream recorder, replay, simulator
+tools/                stream recorder, replay, simulator, detector setup
 scripts/              installation check and demos
 tests/                unit tests
 ```
@@ -54,6 +54,16 @@ The check tests the DCU address first and ends with the `--gpus` and `--endpoint
 run command. The image holds the compiled code; the Python package is mounted from this folder at
 run time.
 
+## Detector settings
+
+The DCU must stream `cbor` with `bslz4` compression, one image per scan position. Check it (read
+only), and set it if needed:
+
+```bash
+python -m tools.detector_setup check --ip <DCU_IP> --scan 256 256 --binned
+python -m tools.detector_setup apply --ip <DCU_IP> --scan 256 256 --binned --frame-time 8.334e-6
+```
+
 ## Run
 
 Start the pipeline before the scan:
@@ -72,6 +82,9 @@ Watch it in a second terminal:
 ```bash
 python examples/viewer.py tcp://127.0.0.1:5601
 ```
+
+Then arm the detector, scan, and disarm, with your usual software or with
+`python -m tools.detector_setup arm` / `disarm --ip <DCU_IP>`.
 
 - At start-up it prints the GPU it uses, and `WARNING: cannot reach …` when the DCU address is
   wrong. No frames can arrive until that is fixed.

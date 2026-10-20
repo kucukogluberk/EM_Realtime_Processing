@@ -134,6 +134,25 @@ data interface on the network to this machine; it can differ from the address of
 page) and the GPU (its number in `nvidia-smi -L`). Check both first:
 `GPU=<N> DCU=<DCU_IP> scripts/check_install.sh`.
 
+The DCU must be set up for the stream: stream `enabled`, format `cbor`, compression `bslz4`,
+binning `2x2` for `--binned`, trigger mode `exts` (one trigger per frame from the scan
+generator), `ntrigger` = Ny×Nx and `nimages` = 1. `tools/detector_setup.py` checks and sets these
+over the DCU's REST API (standard library only):
+
+| step | command | what it does |
+|---|---|---|
+| check | `python -m tools.detector_setup check --ip <DCU_IP> --scan 256 256 --binned` | compares the settings, changes nothing; prints the matching `run.py` flags |
+| apply | `… apply --ip <DCU_IP> --scan 256 256 --binned --frame-time 8.334e-6` | sets what differs (frame time = the scan generator's dwell time) |
+| arm | `… arm --ip <DCU_IP>` | arms; start the pipeline first, the series' `start` message is sent now |
+| disarm | `… disarm --ip <DCU_IP>` | ends the series (the pipeline then reports `COMPLETE`) and shows the DCU's dropped frames |
+| scan | `… scan --ip <DCU_IP> --scan 256 256 --binned` | arm, `start_scan()`, disarm |
+
+The scan generator is not driven by this repository. `start_scan()` in `tools/detector_setup.py`
+is an empty slot, with pseudo-code, for a site's own code; until it is filled in, `scan` asks you
+to start the scan by hand and disarms when you press Enter. `--ip` is the DCU's REST address,
+which can differ from the stream address used for `--endpoint`. Settings missing on a DCU model
+are skipped; `--api` sets the SIMPLON API version if the DCU does not report it.
+
 Run the pipeline inside the container, pointing it at the DCU's ZMQ stream:
 
 ```bash
@@ -567,7 +586,8 @@ realtime_stem/
   streaming/notebook.py        LiveView: the Jupyter subscriber
   apps/run.py                  the runner (transport flags + continuous/rounds loop)
 tools/                         .dstream CLI, stream recorders, replay feeder, npy→.dstream, 4D-STEM
-                               simulator (incl. multi-pass focus walks), synthetic-capture generator
+                               simulator (incl. multi-pass focus walks), synthetic-capture generator,
+                               DCU setup (detector_setup.py)
 scripts/                       machine check, replay demos (Docker / local), accumulator benchmark,
                                CLI-reference generator
 examples/                      viewer, notebook (live_view.ipynb), headless probe, static result plot
