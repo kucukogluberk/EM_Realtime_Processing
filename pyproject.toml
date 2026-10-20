@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "realtime-stem"
+version = "2.0.2"
+description = "Real-time STEM processing: a modular ingest → processing → stream-out pipeline (parallax/tcBF)."
+requires-python = ">=3.10"
+# Core, always needed: numpy (arrays) and pyzmq (the stream-out transport).
+# PyTorch is required by the processing engine but is supplied by the runtime environment — the
+# Holoscan container ships a CUDA build; installing a pip torch over it would be wrong — so it is
+# intentionally not pinned here. See the README.
+dependencies = ["numpy", "pyzmq"]
+
+[project.optional-dependencies]
+viz = ["matplotlib"]               # examples/viewer.py, examples/plot_result.py
+replay = ["cbor2"]                 # tools/replay_to_zmq.py default mode peeks each record's envelope
+                                   # (--fast needs nothing extra); tools/dstream.py info
+decode = ["cbor2", "bitshuffle", "dectris-compression"]   # tools/make_dstream.py (synthesize a
+                                   # .dstream: real bslz4 + a round-trip self-check; host-side, not in the image)
+dev = ["pytest"]
+
+[project.scripts]
+realtime-stem = "realtime_stem.apps.run:main"
+
+[tool.setuptools.packages.find]
+include = ["realtime_stem*"]
