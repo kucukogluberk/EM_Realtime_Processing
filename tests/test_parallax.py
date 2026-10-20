@@ -473,6 +473,30 @@ def test_shape_guard():
     print("test_shape_guard: PASS")
 
 
+def test_keep_bf_mean_keeps_amplitude_contrast():
+    """A pure amplitude object (every BF pixel sees the same image) cancels exactly under the
+    per-frame mean removal, and survives as the shifted BF sum with keep_bf_mean."""
+    geo = _defocus_geo(-1.5e4)
+    rng = np.random.default_rng(0)
+    amplitude = rng.integers(50, 200, size=144)                    # one level per scan position
+    frames = np.broadcast_to(amplitude[:, None, None], (144, 32, 32)).astype(np.uint32)
+    ids = np.arange(144)
+
+    removed = ParallaxAccumulator(geo, device="cpu")
+    removed.process(frames, ids)
+    assert np.abs(removed.result()).max() < 1e-3
+
+    kept = ParallaxAccumulator(geo, device="cpu", keep_bf_mean=True)
+    kept.process(frames, ids)
+    # each scan position deposits its level at every BF pixel's shifted output position
+    expected = np.zeros(144)
+    oy = (ids[:, None] // 12 + geo.shifts[None, :, 0]) % 12
+    ox = (ids[:, None] % 12 + geo.shifts[None, :, 1]) % 12
+    np.add.at(expected, (oy * 12 + ox).ravel(), np.repeat(amplitude.astype(float), geo.n_bf))
+    np.testing.assert_allclose(kept.result().ravel(), expected, rtol=1e-5)
+    print("test_keep_bf_mean_keeps_amplitude_contrast: PASS")
+
+
 def test_accumulator_satisfies_protocol():
     """ParallaxAccumulator must satisfy the `Accumulator` contract the ingest sink drives."""
     from realtime_stem.processing.base import Accumulator
@@ -583,6 +607,7 @@ if __name__ == "__main__":
     test_uint16_torch_tensor_high_values_exact()
     test_uint32_high_values_exact()
     test_shape_guard()
+    test_keep_bf_mean_keeps_amplitude_contrast()
     test_accumulator_satisfies_protocol()
     test_registry_has_parallax()
     test_cli_config_overrides()

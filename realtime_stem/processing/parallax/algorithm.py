@@ -40,6 +40,12 @@ class ParallaxAlgorithm(Algorithm):
             "--binned", action="store_true",
             help="ARINA 2×2-binned preset: 96×96 detector, doubled angular sampling.")
         add_tuning_args(g)        # --defocus/--rotation/--upsampling/physics/--scan/--center
+        g.add_argument(
+            "--keep-bf-mean", action="store_true",
+            help="Don't remove each frame's mean over the bright-field pixels before the shifted "
+                 "sum. Keeps amplitude (total bright-field) contrast, which the removal cancels "
+                 "exactly; at C10 = 0 the image becomes the plain bright-field image. Leave the "
+                 "DC correction on with it, or the static bright-field pattern dominates.")
         add_readout_args(parser)  # --no-phase-flip/--no-dc-correct/--normalize/filters
 
     def preprocess_argv(self, argv: list[str]) -> list[str]:
@@ -72,7 +78,11 @@ class ParallaxAlgorithm(Algorithm):
         acc = ParallaxAccumulator(geo, device=getattr(args, "device", None),
                                   readout=readout_from_args(args),
                                   accumulate="latest" if mode == "latest" else "all",
-                                  wrap_ids=mode != "scan")
+                                  wrap_ids=mode != "scan",
+                                  keep_bf_mean=getattr(args, "keep_bf_mean", False))
+        if acc.keep_bf_mean:
+            print("[parallax] keep-bf-mean: per-frame bright-field mean kept (amplitude contrast)",
+                  flush=True)
         if mode == "latest":
             itemsize = 4 if getattr(args, "dtype", "uint16") == "uint32" else 2
             print(f"[parallax] accumulate=latest: keeping the newest frame per scan position "

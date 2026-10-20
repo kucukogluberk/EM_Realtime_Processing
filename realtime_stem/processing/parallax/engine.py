@@ -265,10 +265,13 @@ class ParallaxAccumulator:
 
     def __init__(self, geometry: ParallaxGeometry, device: str | None = None,
                  measure: bool = False, readout: ReadoutConfig | None = None,
-                 accumulate: str = "all", wrap_ids: bool = False):
+                 accumulate: str = "all", wrap_ids: bool = False, keep_bf_mean: bool = False):
         if accumulate not in ("all", "latest"):
             raise ValueError(f"accumulate must be 'all' or 'latest', not {accumulate!r}")
         self.device = _pick_device(device)
+        # keep_bf_mean: skip the per-frame DC removal, so a frame's total bright-field intensity
+        # (amplitude contrast, which is identical in every tilted view) is kept in the sum.
+        self.keep_bf_mean = bool(keep_bf_mean)
         self.geometry = geometry
         self.detector_shape = tuple(geometry.detector_shape)
         self.scan_shape = tuple(geometry.scan_shape)
@@ -414,19 +417,20 @@ class ParallaxAccumulator:
             return flat_f.view(torch.int32)[:, self._bf_inds], "u32"
         return flat_f[:, self._bf_inds], "plain"
 
-    @staticmethod
-    def _as_float(raw: torch.Tensor, kind: str) -> torch.Tensor:
-        """Gathered BF pixels → float32, per-frame mean (DC) removed."""
+    def _as_float(self, raw: torch.Tensor, kind: str) -> torch.Tensor:
+        """Gathered BF pixels → float32, per-frame mean (DC) removed unless `keep_bf_mean`."""
         g = raw.float()
         if kind == "u16":
             g = torch.where(g < 0, g + 65536.0, g)
         elif kind == "u32":
             g = torch.where(g < 0, g + 4294967296.0, g)
+        if self.keep_bf_mean:
+            return g
         return g - g.mean(dim=1, keepdim=True)
 
     def _accumulate_into(self, f: torch.Tensor, ids) -> None:
         # Gather the M bright-field pixels of every frame, remove the per-frame DC (mean over BF
-        # pixels), then scatter-add each contribution to its parallax-shifted, toroidally-wrapped
+        # pixels; kept with keep_bf_mean), then scatter-add each contribution to its parallax-shifted, toroidally-wrapped
         # output position. Independent % Ny / % Nx wraps = the correct scan-grid torus.
         b = f.shape[0]
         raw, kind = self._gather(f.reshape(b, -1))

@@ -43,10 +43,11 @@ usage: python -m realtime_stem.apps.run [-h] [--algorithm {parallax}]
                                         [--upsampling U] [--energy EV] [--semiangle MRAD]
                                         [--angular-sampling MRAD_PX] [--scan-sampling ANG_PX]
                                         [--center ROW COL] [--scan NY NX] [--flip-cols]
-                                        [--detector-layout LAYOUT] [--no-phase-flip]
-                                        [--no-dc-correct] [--normalize] [--coverage] [--lowpass Q]
-                                        [--highpass Q] [--butterworth-order N]
-                                        [--suppress-nyquist {auto,on,off}] [--band-limit]
+                                        [--detector-layout LAYOUT] [--keep-bf-mean]
+                                        [--no-phase-flip] [--no-dc-correct] [--normalize]
+                                        [--coverage] [--lowpass Q] [--highpass Q]
+                                        [--butterworth-order N] [--suppress-nyquist {auto,on,off}]
+                                        [--band-limit]
 ```
 
 **general**
@@ -110,6 +111,7 @@ usage: python -m realtime_stem.apps.run [-h] [--algorithm {parallax}]
 | `--scan NY NX` |  | Scan grid; must match what the microscope drives. Config default: 1024 1024. |
 | `--flip-cols` | flag | The detector's columns are reversed relative to the canonical layout (LiberTEM's detector_flip_cols). With --rotation this covers every transpose/flip: e.g. a transposed detector is --rotation +90 --flip-cols. Give --center as measured on the raw frames. Table in docs/GUIDE.md. |
 | `--detector-layout LAYOUT` |  | What the raw frame's (axis 0, axis 1) hold relative to the canonical (rows, cols) layout: rows,cols \| rows,-cols \| -rows,cols \| -rows,-cols \| cols,rows \| cols,-rows \| -cols,rows \| -cols,-rows. E.g. 'cols,-rows' = transposed with the second axis reversed. Adds the matching rotation and column flip to --rotation, and maps the default disk center onto the raw frame. Exclusive with --flip-cols. |
+| `--keep-bf-mean` | flag | Don't remove each frame's mean over the bright-field pixels before the shifted sum. Keeps amplitude (total bright-field) contrast, which the removal cancels exactly; at C10 = 0 the image becomes the plain bright-field image. Leave the DC correction on with it, or the static bright-field pattern dominates. |
 
 **parallax readout (live channels and saved images)**
 
