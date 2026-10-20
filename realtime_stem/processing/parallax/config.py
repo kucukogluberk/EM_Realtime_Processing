@@ -20,6 +20,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field, replace
 
+from realtime_stem.processing.parallax.orientation import DETECTOR_LAYOUTS, layout_center
+from realtime_stem.processing.parallax.readout import ReadoutConfig
+
 
 @dataclass(frozen=True)
 class ParallaxConfig:
@@ -45,6 +48,9 @@ class ParallaxConfig:
     # BF-disk center on the detector, (row, col) px — py4DSTEM get_probe_size's
     # (Center_X, Center_Y). None → frame center. Real beams sit off-center; override with --center.
     probe_center: tuple[float, float] | None = None
+    # Detector columns reversed relative to the canonical (Q_rows, Q_cols) layout — LiberTEM's
+    # `detector_flip_cols`; with rotation_angle it describes any transpose/flip. --flip-cols.
+    flip_cols: bool = False
 
     # ── Derived helpers ───────────────────────────────────────────────────────
     @property
@@ -71,31 +77,93 @@ CONFIG = ParallaxConfig()
 # defocus offline against a replay or drive it live. CLI angles are degrees (the microscope readout).
 
 def add_tuning_args(p) -> None:
-    """Attach the shared parallax tuning flags to an argparse parser."""
+    """Attach the shared parallax tuning flags to an argparse parser (each help names the
+    config default it overrides)."""
+    c = CONFIG
     p.add_argument("--defocus", type=float, default=None, metavar="C10_ANG",
-                   help="Override the defocus C10 (Å) used to build the parallax shifts.")
+                   help="Target defocus C10 (Å) the parallax shifts are built for (negative = "
+                        f"underfocus). Config default: {c.aberration_coefs.get('C10', 0.0):g}.")
     p.add_argument("--rotation", type=float, default=None, metavar="DEG",
-                   help="Override the scan/detector rotation (degrees).")
+                   help="Scan/detector rotation (degrees). Config default: 0.")
     p.add_argument("--c12", type=float, default=None, metavar="C12_ANG",
-                   help="Override the astigmatism magnitude C12 (Å).")
+                   help="Target astigmatism magnitude C12 (Å). Config default: 0.")
     p.add_argument("--phi12", type=float, default=None, metavar="DEG",
-                   help="Override the astigmatism angle phi12 (degrees).")
+                   help="Target astigmatism angle phi12 (degrees). Config default: 0.")
     p.add_argument("--upsampling", type=int, default=None, metavar="U",
-                   help="Override config.upsampling_factor (finer output grid → finer shifts).")
+                   help="Output-grid upsampling (finer grid → finer shifts). "
+                        f"Config default: {c.upsampling_factor}.")
     p.add_argument("--energy", type=float, default=None, metavar="EV",
-                   help="Override the beam energy (eV).")
+                   help=f"Beam energy (eV). Config default: {c.energy:g}.")
     p.add_argument("--semiangle", type=float, default=None, metavar="MRAD",
-                   help="Override the probe convergence semiangle cutoff (mrad).")
+                   help="Probe convergence semiangle, the bright-field cutoff (mrad). "
+                        f"Config default: {c.semiangle_cutoff:g}.")
     p.add_argument("--angular-sampling", type=float, default=None, metavar="MRAD_PX",
-                   help="Override the detector angular sampling (mrad/px, isotropic). "
-                        "Give the value for the mode actually running (wins over --binned doubling).")
+                   help="Detector angular sampling (mrad/px, isotropic) of the mode actually "
+                        "running (wins over --binned doubling). Config default: "
+                        f"{c.angular_sampling[0]:g} (×2 with --binned).")
     p.add_argument("--scan-sampling", type=float, default=None, metavar="ANG_PX",
-                   help="Override the scan step (Å, isotropic).")
+                   help=f"Scan step (Å, isotropic). Config default: {c.scan_sampling[0]:g}.")
     p.add_argument("--center", type=float, nargs=2, default=None, metavar=("ROW", "COL"),
-                   help="BF-disk center on the detector (px), py4DSTEM's Center_X Center_Y "
-                        "from get_probe_size. Default: the frame center.")
+                   help="BF-disk center on the raw detector frames (px), py4DSTEM's Center_X "
+                        "Center_Y from get_probe_size. Default: the frame center (mapped through "
+                        "--detector-layout).")
     p.add_argument("--scan", type=int, nargs=2, default=None, metavar=("NY", "NX"),
-                   help="Override the scan grid (must match what the microscope drives).")
+                   help="Scan grid; must match what the microscope drives. Config default: "
+                        f"{c.scan_shape[0]} {c.scan_shape[1]}.")
+    p.add_argument("--flip-cols", action="store_true",
+                   help="The detector's columns are reversed relative to the canonical layout "
+                        "(LiberTEM's detector_flip_cols). With --rotation this covers every "
+                        "transpose/flip: e.g. a transposed detector is --rotation +90 --flip-cols. "
+                        "Give --center as measured on the raw frames. Table in docs/GUIDE.md.")
+    p.add_argument("--detector-layout", choices=list(DETECTOR_LAYOUTS), default=None,
+                   metavar="LAYOUT",
+                   help="What the raw frame's (axis 0, axis 1) hold relative to the canonical "
+                        "(rows, cols) layout: " + " | ".join(DETECTOR_LAYOUTS) + ". E.g. "
+                        "'cols,-rows' = transposed with the second axis reversed. Adds the "
+                        "matching rotation and column flip to --rotation, and maps the default "
+                        "disk center onto the raw frame. Exclusive with --flip-cols.")
+
+
+def add_readout_args(p) -> None:
+    """Attach the readout flags: what each live snapshot / saved image derives from the
+    accumulated sum (no hot-path cost). See processing/parallax/readout.py."""
+    g = p.add_argument_group("parallax readout (live channels and saved images)")
+    g.add_argument("--no-phase-flip", dest="phase_flip", action="store_false",
+                   help="Don't add the phase-flipped (sign(sin chi(q))) channel.")
+    g.add_argument("--no-dc-correct", dest="dc_correct", action="store_false",
+                   help="Don't remove each bright-field pixel's running scan mean (it removes the "
+                        "static bright-field pattern at the scan front and on upsampled grids).")
+    g.add_argument("--normalize", action="store_true",
+                   help="Divide by the per-pixel deposit count (tapered below 1%% of its peak), "
+                        "so a partial scan reads at full brightness.")
+    g.add_argument("--coverage", action="store_true",
+                   help="Add the per-pixel deposit count as a channel.")
+    g.add_argument("--lowpass", type=float, default=None, metavar="Q",
+                   help="Butterworth low-pass cutoff (1/Å).")
+    g.add_argument("--highpass", type=float, default=None, metavar="Q",
+                   help="Butterworth high-pass cutoff (1/Å).")
+    g.add_argument("--butterworth-order", type=int, default=12, metavar="N",
+                   help="Steepness of the Butterworth low/high-pass edges.")
+    g.add_argument("--suppress-nyquist", choices=("auto", "on", "off"), default="auto",
+                   help="Zero the Nyquist row/column of the output (auto: on when --upsampling > 1).")
+    g.add_argument("--band-limit", action="store_true",
+                   help="Clamp the low-pass at the parallax band limit 2*alpha/lambda.")
+
+
+def readout_from_args(args) -> ReadoutConfig:
+    """The `ReadoutConfig` for the readout flags (defaults when they were never added)."""
+    nyq = getattr(args, "suppress_nyquist", "auto")
+    return ReadoutConfig(
+        phase_flip=getattr(args, "phase_flip", True),
+        dc_correct=getattr(args, "dc_correct", True),
+        normalize=getattr(args, "normalize", False),
+        coverage_channel=getattr(args, "coverage", False),
+        q_lowpass=getattr(args, "lowpass", None),
+        q_highpass=getattr(args, "highpass", None),
+        butterworth_order=getattr(args, "butterworth_order", 12),
+        suppress_nyquist=None if nyq == "auto" else nyq == "on",
+        band_limit=getattr(args, "band_limit", False),
+    )
 
 
 # Float-valued tuning flags whose natural values are often negative (e.g. underfocus C10).
@@ -137,6 +205,8 @@ def config_from_args(args, cfg: ParallaxConfig | None = None) -> ParallaxConfig:
         # 2×2 binning halves the detector and doubles the per-pixel angular sampling.
         overrides.update(detector_shape=(96, 96),
                          angular_sampling=(cfg.angular_sampling[0] * 2, cfg.angular_sampling[1] * 2))
+    if getattr(args, "detector", None) is not None:
+        overrides["detector_shape"] = (int(args.detector[0]), int(args.detector[1]))
 
     aberr = dict(cfg.aberration_coefs)
     if args.defocus is not None:
@@ -164,5 +234,19 @@ def config_from_args(args, cfg: ParallaxConfig | None = None) -> ParallaxConfig:
         overrides["probe_center"] = (args.center[0], args.center[1])
     if args.scan is not None:
         overrides["scan_shape"] = (int(args.scan[0]), int(args.scan[1]))
+    if getattr(args, "flip_cols", False):
+        overrides["flip_cols"] = True
+
+    layout = getattr(args, "detector_layout", None)
+    if layout is not None:
+        if getattr(args, "flip_cols", False):
+            raise SystemExit("--detector-layout already sets the column flip; drop --flip-cols.")
+        rot_adjust, flip = DETECTOR_LAYOUTS[layout]
+        base = overrides.get("rotation_angle", cfg.rotation_angle) or 0.0
+        overrides["rotation_angle"] = base + rot_adjust
+        overrides["flip_cols"] = flip
+        if overrides.get("probe_center", cfg.probe_center) is None and layout != "rows,cols":
+            det = overrides.get("detector_shape", cfg.detector_shape)
+            overrides["probe_center"] = layout_center(det, layout)
 
     return replace(cfg, **overrides) if overrides else cfg   # frozen dataclass → replace()

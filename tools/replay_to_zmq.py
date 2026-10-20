@@ -21,7 +21,7 @@ from tools.dstream import envelope_type, iter_records   # noqa: E402
 
 
 def replay_dstream(path: str, endpoint: str, max_frames: int | None = None,
-                   linger_s: float = 2.0, fast: bool = False) -> int:
+                   linger_s: float = 2.0, fast: bool = False, rate: float = 0.0) -> int:
     ctx = zmq.Context.instance()
     sock = ctx.socket(zmq.PUSH)
     sock.bind(endpoint)
@@ -49,6 +49,7 @@ def replay_dstream(path: str, endpoint: str, max_frames: int | None = None,
 
     sent_images = 0
     end_raw = None
+    t0 = time.perf_counter()
     for raw in iter_records(path):
         t = envelope_type(raw)
         if t == "start":
@@ -58,6 +59,10 @@ def replay_dstream(path: str, endpoint: str, max_frames: int | None = None,
                 continue
             sock.send(raw)
             sent_images += 1
+            if rate > 0 and sent_images % 64 == 0:   # pace like a scan, in small bursts
+                ahead = sent_images / rate - (time.perf_counter() - t0)
+                if ahead > 0:
+                    time.sleep(ahead)
         elif t == "end":
             end_raw = raw  # send after the loop so a capped run stays well-formed
     sock.send(end_raw if end_raw is not None else b"")
@@ -66,16 +71,30 @@ def replay_dstream(path: str, endpoint: str, max_frames: int | None = None,
     return sent_images
 
 
-def main() -> None:
-    p = argparse.ArgumentParser(description="Replay a .dstream over ZMQ PUSH.")
-    p.add_argument("dstream")
-    p.add_argument("--endpoint", default="tcp://127.0.0.1:5555")
-    p.add_argument("--max-frames", type=int, default=None)
+def build_parser() -> argparse.ArgumentParser:
+    """The command-line interface (also rendered into docs/CLI.md)."""
+    p = argparse.ArgumentParser(
+        prog="python -m tools.replay_to_zmq", description="Replay a .dstream over ZMQ PUSH.")
+    p.add_argument("dstream", help="The .dstream capture to replay.")
+    p.add_argument("--endpoint", default="tcp://127.0.0.1:5555",
+                   help="ZMQ PUSH endpoint to bind (run.py --endpoint connects to it).")
+    p.add_argument("--max-frames", type=int, default=None,
+                   help="Send only the first N images (then the end message).")
+    p.add_argument("--rate", type=float, default=0.0, metavar="HZ",
+                   help="Send at most this many frames/s (0 = as fast as the consumer takes them), "
+                        "so a live view fills in like a scan.")
     p.add_argument("--fast", action="store_true",
-                   help="no per-record CBOR peek — max-rate feed for throughput measurement "
-                        "(whole file, assumes start-first/end-last)")
+                   help="No per-record CBOR peek: a max-rate feed for throughput measurement "
+                        "(whole file, assumes start first and end last).")
+    return p
+
+
+def main() -> None:
+    p = build_parser()
     args = p.parse_args()
-    n = replay_dstream(args.dstream, args.endpoint, args.max_frames, fast=args.fast)
+    if args.fast and args.rate:
+        p.error("--fast replays unpaced; drop --rate")
+    n = replay_dstream(args.dstream, args.endpoint, args.max_frames, fast=args.fast, rate=args.rate)
     print(f"[replay] sent {n} image frames from {args.dstream}")
 
 

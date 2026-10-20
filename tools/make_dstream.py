@@ -18,13 +18,9 @@ import struct
 import sys
 from pathlib import Path
 
-import bitshuffle
-import cbor2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # repo root → `import tools.*`
-
-from dectris.compression import decompress   # noqa: E402
 
 from tools.dstream import write_magic, write_record   # noqa: E402
 
@@ -47,6 +43,7 @@ def make_frame(rng: np.random.Generator, shape: tuple[int, int], dtype: str,
 
 
 def encode_bslz4(frame: np.ndarray, block_bytes: int) -> bytes:
+    import bitshuffle
     elem = frame.dtype.itemsize
     block_elems = block_bytes // elem
     payload = bitshuffle.compress_lz4(frame, block_elems).tobytes()
@@ -55,6 +52,8 @@ def encode_bslz4(frame: np.ndarray, block_bytes: int) -> bytes:
 
 
 def image_message(image_id: int, frame: np.ndarray, block_bytes: int) -> bytes:
+    import cbor2
+    from dectris.compression import decompress
     dtype = str(frame.dtype)
     blob = encode_bslz4(frame, block_bytes)
     # Generation-time self check: the real decoder must reproduce the frame bytes.
@@ -72,16 +71,25 @@ def image_message(image_id: int, frame: np.ndarray, block_bytes: int) -> bytes:
     return cbor2.dumps(cbor2.CBORTag(_SELF_DESCRIBE, msg))
 
 
-def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("height", type=int)
-    p.add_argument("width", type=int)
-    p.add_argument("dtype", choices=tuple(_TYPED_ARRAY_TAG))
-    p.add_argument("n_frames", type=int)
+def build_parser() -> argparse.ArgumentParser:
+    """The command-line interface (also rendered into docs/CLI.md)."""
+    p = argparse.ArgumentParser(
+        prog="python -m tools.make_dstream", description=__doc__.splitlines()[0])
+    p.add_argument("height", type=int, help="Detector rows.")
+    p.add_argument("width", type=int, help="Detector columns.")
+    p.add_argument("dtype", choices=tuple(_TYPED_ARRAY_TAG), help="Pixel type.")
+    p.add_argument("n_frames", type=int, help="Number of frames (random counts, not physics).")
     p.add_argument("--block-bytes", type=int, default=8192,
                    help="bslz4 block size in bytes (written to the container header).")
-    p.add_argument("--seed", type=int, default=1234)
-    p.add_argument("--out", required=True)
+    p.add_argument("--seed", type=int, default=1234, help="Random seed.")
+    p.add_argument("--out", required=True, help="The .dstream file to write.")
+    return p
+
+
+def main() -> None:
+    import cbor2
+
+    p = build_parser()
     args = p.parse_args()
 
     shape = (args.height, args.width)

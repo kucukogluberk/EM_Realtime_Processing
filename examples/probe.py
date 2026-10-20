@@ -18,11 +18,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # repo root on pa
 from realtime_stem.streaming.live_stream import LiveSubscriber   # noqa: E402
 
 
-def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("endpoint")
+def build_parser() -> argparse.ArgumentParser:
+    """The command-line interface (also rendered into docs/CLI.md)."""
+    p = argparse.ArgumentParser(
+        prog="python examples/probe.py", description=__doc__)
+    p.add_argument("endpoint", help="tcp://host:port of the run.py --live-endpoint PUB.")
     p.add_argument("--seconds", type=float, default=15.0, help="How long to listen.")
     p.add_argument("--save", default=None, help="Path to save the last frame received (.npy).")
+    return p
+
+
+def main() -> None:
+    p = build_parser()
     args = p.parse_args()
 
     sub = LiveSubscriber(args.endpoint)
@@ -37,7 +44,8 @@ def main() -> None:
         n += 1
         last = arr
         print(f"[probe] frame {n}: seq={header['seq']} shape={tuple(arr.shape)} "
-              f"final={header['final']}", flush=True)
+              f"channels={header.get('channels')} final={header['final']} "
+              f"meta={header.get('meta')}", flush=True)
         if header["final"]:
             print("[probe] saw final=True", flush=True)
     print(f"[probe] received {n} frames total", flush=True)

@@ -37,6 +37,19 @@ class Accumulator(Protocol):
         """Return the reconstruction-so-far as a host array (safe to call at any time)."""
         ...
 
+    # Optional hook (not part of the runtime-checked protocol): an accumulator may also define
+    #
+    #     def snapshot(self) -> tuple[np.ndarray, list[str], dict]:
+    #         """(C, Ny, Nx) float32 stack of named live channels, their names, and metadata."""
+    #
+    # The sink publishes that instead of `result()` when present (`ingest.sink.publish_snapshot`),
+    # so a method can stream several derived images (parallax: corrected + phase-flipped) and
+    # display metadata without the ingest or the runner knowing what they are.
+    #
+    # For repeated scans (`--accumulate latest|all`) an accumulator may also expose
+    # `wrap_ids: bool` (ids past the scan wrap onto it, so the sink doesn't reject them) and
+    # `start_series()` (called by the runner when a new detector series starts).
+
 
 class Algorithm(ABC):
     """Wires one method into the runner: its CLI flags, how to build its accumulator, how to save.

@@ -81,3 +81,46 @@ def test_continuous_save_keeps_a_numbered_copy(tmp_path):
                      "parallax_recon_scan002.npy", "parallax_shifts.npy"]
     assert np.load(tmp_path / "parallax_recon_scan001.npy").max() == 0
     assert np.load(tmp_path / "parallax_recon.npy").max() == 1          # the latest scan
+
+
+def test_continuous_save_tags_every_channel(tmp_path):
+    """With readout channels, the numbered copy is kept for each channel."""
+    from realtime_stem.processing.parallax.algorithm import ParallaxAlgorithm
+    acc = SimpleNamespace(images=lambda: {"raw": np.zeros((4, 4), np.float32),
+                                          "phase_flipped": np.ones((4, 4), np.float32)},
+                          geometry=SimpleNamespace(shifts=np.zeros((3, 2), np.int32)))
+    ParallaxAlgorithm().save(acc, tmp_path, tag="scan001")
+    names = sorted(f.name for f in tmp_path.iterdir())
+    assert names == ["parallax_phase_flipped.npy", "parallax_phase_flipped_scan001.npy",
+                     "parallax_recon.npy", "parallax_recon_scan001.npy", "parallax_shifts.npy"]
+
+
+def _args(argv):
+    algo = registry.get("parallax")
+    return run_mod.build_parser(algo).parse_args(algo.preprocess_argv(argv))
+
+
+def test_resolve_ingest():
+    """--source is Python-only; auto takes Holoscan only where its modules import (not here)."""
+    import importlib.util
+    have_holoscan = all(importlib.util.find_spec(m) for m in run_mod._HOLOSCAN_MODULES)
+    assert run_mod.resolve_ingest(_args(["--source", "x.dstream"])) == "python"
+    assert run_mod.resolve_ingest(_args(["--ingest", "python"])) == "python"
+    assert run_mod.resolve_ingest(_args(["--ingest", "holoscan"])) == "holoscan"
+    assert run_mod.resolve_ingest(_args([])) == ("holoscan" if have_holoscan else "python")
+    assert run_mod.resolve_ingest(_args(["--device", "mps"])) == "python"
+    import pytest
+    with pytest.raises(SystemExit):
+        run_mod.resolve_ingest(_args(["--ingest", "holoscan", "--source", "x.npy"]))
+
+
+def test_readout_flags_map_to_config():
+    from realtime_stem.processing.parallax.config import readout_from_args
+    cfg = readout_from_args(_args([]))
+    assert cfg.phase_flip and cfg.dc_correct and not cfg.normalize and cfg.suppress_nyquist is None
+    cfg = readout_from_args(_args(["--no-phase-flip", "--no-dc-correct", "--normalize",
+                                   "--coverage", "--lowpass", "0.2", "--highpass", "0.01",
+                                   "--suppress-nyquist", "off", "--band-limit"]))
+    assert not cfg.phase_flip and not cfg.dc_correct and cfg.normalize and cfg.coverage_channel
+    assert cfg.q_lowpass == 0.2 and cfg.q_highpass == 0.01
+    assert cfg.suppress_nyquist is False and cfg.band_limit

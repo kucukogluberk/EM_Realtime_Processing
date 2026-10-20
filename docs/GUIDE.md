@@ -1,12 +1,15 @@
 # realtime-stem — technical guide
 
-The full description: architecture, build, usage, known issues. For the short version (what is
-where, install, run) see the [README](../README.md).
+The full description: architecture, build, usage, live tuning, commissioning, known issues. For
+the short version (what is where, install, run) see the [README](../README.md); every
+command-line parameter is in [CLI.md](CLI.md); what changed and when is in the
+[CHANGELOG](../CHANGELOG.md).
 
 Real-time STEM data processing at full detector frame rate. Detector frames stream from a DECTRIS
-detector control unit (DCU), are GPU-decompressed on an NVIDIA Holoscan ingest, folded into a
-reconstruction as they arrive, and streamed out live over ZeroMQ — so the reconstruction fills in
-*during* the scan rather than only at the end.
+detector control unit (DCU), are GPU-decompressed on an NVIDIA Holoscan ingest (or decoded on the
+CPU by a pure-Python ingest, anywhere), folded into a reconstruction as they arrive, and streamed
+out live over ZeroMQ — so the reconstruction fills in *during* the scan rather than only at the
+end, and keeps following the microscope while it scans continuously.
 
 The worked example is **parallax / tilt-corrected bright field (tcBF)**, running at 120 kHz on
 binned ARINA data. The pipeline is deliberately modular so a new algorithm is a drop-in.
@@ -19,20 +22,29 @@ Three stages with narrow interfaces, so each can be understood and changed on it
    DCU ─(ZeroMQ)─►  ingest  ─(batches)─►  processing  ─(reconstruction)─►  stream-out  ─(ZeroMQ)─►  subscribers
                  ZmqRxOp →              Accumulator                     LivePublisher            viewer / probe / …
                  DecompressGpuOp        .process(frames, ids)
-                 (C++/CUDA)             .result()
+                 (C++/CUDA)             .result() / .snapshot()
+             or  PythonIngest
+                 (CPU decode; also
+                  .dstream / .npy files)
 ```
 
-- **ingest** (`realtime_stem/ingest/`) — receives raw frames and bslz4-decompresses them on the
-  GPU using two compiled Holoscan C++ operators, then hands each decoded batch to an `Accumulator`
-  as a zero-copy CUDA tensor. Algorithm-agnostic.
+- **ingest** (`realtime_stem/ingest/`) — two interchangeable front ends feeding one `BatchSink`
+  (`sink.py`: batch → `accumulator.process`, throughput, throttled live snapshots).
+  The Holoscan graph (`holoscan_graph.py`) receives raw frames and bslz4-decompresses them on the
+  GPU using two compiled C++ operators, handing each batch over as a zero-copy CUDA tensor: the
+  full-rate path. The pure-Python ingest (`python_ingest.py`, `codec.py`) decodes the same
+  messages on the CPU — from ZeroMQ or straight from a `.dstream`/`.npy` file — for machines with
+  no NVIDIA GPU, at tens of kHz (see "Running without the container"). Algorithm-agnostic.
 - **processing** (`realtime_stem/processing/`) — turns batches into a reconstruction behind two
   small contracts (`processing/base.py`): `Accumulator` (the hot path) and `Algorithm` (the
   wiring). Parallax lives in `processing/parallax/`.
 - **stream-out** (`realtime_stem/streaming/`) — publishes the reconstruction-so-far over ZeroMQ
-  (PUB, lossy, non-blocking). A matplotlib viewer is just one example subscriber; the product is
-  the stream.
+  (PUB, lossy, non-blocking). An accumulator with a `snapshot()` hook publishes several named
+  channels per frame (parallax: the corrected image and the phase-flipped one) with metadata in
+  the header. A matplotlib viewer is just one example subscriber; the product is the stream.
 
-`apps/run.py` wires the three together and owns only transport flags; it never mentions parallax.
+`apps/run.py` wires the three together and owns only transport flags (`--ingest`, `--device`,
+`--source`, live cadence, …); it never mentions parallax.
 
 ## Prerequisites
 
@@ -136,9 +148,12 @@ On the host, watch it fill in:
 python examples/viewer.py tcp://127.0.0.1:5601
 ```
 
-`--continuous` re-arms after each scan's end (one container for a whole session). Results
+`--continuous` re-arms after each scan's end (one container for a whole session); to tune the
+microscope while it scans continuously, use `--accumulate latest` instead (see "Continuous
+scanning"). Results
 (`parallax_recon.npy`, `parallax_shifts.npy`) land in `out/`; plot a saved one with
-`python examples/plot_result.py out/parallax_recon.npy`. See `run.py --help` for all flags; the
+`python examples/plot_result.py out/parallax_recon.npy`. See [CLI.md](CLI.md) (or `--help`) for
+all flags; the
 parallax tuning knobs (`--defocus`, `--rotation`, `--energy`, `--semiangle`, `--angular-sampling`,
 `--scan-sampling`, `--center`, …) use the same units live as offline.
 
@@ -160,6 +175,280 @@ python3 tools/record_stream.py capture --ip <DCU_IP> --out scan01.dstream
 and start the scan. The recorder (host Python with `pyzmq` and `cbor2`) stops by itself at the
 end of the scan and reports whether every frame arrived (`COMPLETE`). Replay it into the pipeline
 with `tools/replay_to_zmq.py`; keep the microscope settings of each recording next to it.
+
+## Running without the container
+
+`--ingest python` (the default wherever Holoscan isn't importable) replaces the compiled ingest
+with `PythonIngest`. It decodes the same DECTRIS Stream2 messages on the CPU (`codec.py`: cbor2,
+and bslz4 via `dectris-compression` when installed, else numpy + `lz4`), batches them, and drives
+the same sink. The reconstruction runs on `--device auto` (cuda, then Apple's `mps`, then cpu).
+
+- **Sources.** A ZMQ endpoint (`--endpoint`, `--n-connections`). The ingest keeps draining every
+  connection for 200 ms after `end`, so the replay race below does not lose frames here, and a
+  `start` arriving early is kept for the next round. Or a file, `--source capture.dstream` or
+  `--source frames.npy` ((Ny, Nx, H, W) or (N, H, W)), with `--source-rate HZ` to replay it at a
+  chosen frame rate.
+- **Partial batches** are always processed: the last one of a scan, and any batch that has waited
+  50 ms, so slow sources still update the live view smoothly.
+- **Rate** (Apple M4 Pro): decode ~80k messages/s with `dectris-compression` (~6k/s with the numpy
+  fallback). End to end from a `.dstream`, a 256×256 scan of 96×96 frames with 1249 BF pixels
+  reconstructs at ~75 kHz on `mps`.
+- `scripts/run_local_demo.sh` runs feeder → `run.py --ingest python` → viewer with no Docker.
+
+`pip install -e ".[local,viz,replay]"` installs what this needs. Never install the `local` extra
+into the Holoscan container: it would replace the image's CUDA build of torch.
+
+## Watching in a notebook
+
+`realtime_stem.streaming.notebook.LiveView` is a stream subscriber for Jupyter
+(`pip install -e ".[notebook]"`); `examples/live_view.ipynb` is a worked example on a local replay.
+
+- **Non-blocking.** `view.start()` receives on the kernel's asyncio loop (`zmq.asyncio`), so
+  cells keep running while the scan fills in. `await view.wait_final()` waits for the scan's final
+  frame; in `--continuous` mode the view keeps going with the next scan.
+- **Backends.** With `%matplotlib widget` (ipympl) the figure redraws in place. With any other
+  backend the output cell is re-rendered as a PNG on each update.
+- **History.** The view keeps only the last `history` frames (64 by default, 0 = none), so a
+  long session doesn't grow memory:
+  - `view.snapshot_at(0.5)` returns the kept frame nearest half-scanned
+    (`scan_pass=k` restricts it to one pass of a continuous scan);
+  - `view.save_gif(path)` writes the fill-in as an animation;
+  - `view.latest` is the newest `(stack, header)`.
+- **Same rendering.** The desktop viewer and the notebook draw with the same `PanelFigure`
+  (`streaming/display.py`): one panel per channel, robust contrast, progress / C10 / rotation in
+  the title.
+- **Subscribe first.** A PUB/SUB subscriber only sees frames sent after it connects. For a
+  notebook on another machine, bind the publisher to all interfaces:
+  `--live-endpoint tcp://0.0.0.0:5601`.
+
+The publisher's socket lingers up to 1 s on close, so the final snapshot (sent just before the
+runner exits) reaches connected subscribers rather than being dropped with the queue.
+
+## Live channels (readout)
+
+The hot path only deposits shifted, frame-mean-subtracted bright-field values into one buffer,
+plus two small side accumulators: the visits per scan position and each BF pixel's running sum (an
+O(B·M) add per batch, 2–7% of `process()`). Everything linear and shift-invariant over the scan is
+applied to the accumulated sum when a snapshot is taken (`processing/parallax/readout.py`), so it
+costs nothing per frame:
+
+| channel / flag | what it is |
+|---|---|
+| `parallax` | the sum, with each BF pixel's running scan mean removed (`--no-dc-correct` to skip) and the optional filters below |
+| `phase_flipped` | the same, times `sign(sin χ(q))` (`--no-phase-flip` to drop the channel) |
+| `coverage` (`--coverage`) | deposits per output pixel |
+| `--normalize` | divide by coverage, tapered below 1% of its peak (quantem's `mean · support`): a partial scan reads at full brightness and the phase flip rings less at the scan front |
+| `--lowpass`, `--highpass`, `--butterworth-order`, `--band-limit` | Butterworth filters (1/Å); the band limit clamps the low-pass at 2α/λ |
+| `--suppress-nyquist {auto,on,off}` | zero the Nyquist row/column (auto: when `--upsampling` > 1) |
+
+Why each is exact:
+
+- **Phase flip.** The streaming reference scatters a grouped real-space kernel per frame
+  (`parallax_phase_flip_accumulate_cpu`). Its kernel is the same for every BF pixel, so the
+  operator is a convolution of the parallax sum, and by linearity filtering the partial sum gives
+  the streamed phase-flipped image at that moment, mid-scan included (pinned to float precision in
+  `tests/test_readout.py`). It costs one FFT pair per snapshot (2–4 ms on Apple M4 Pro `mps` at
+  1024², ~25 ms on its CPU) instead of a U×M scatter per frame, and the grouped kernel would need
+  ~12.6 GB at 1024². The reference also wraps the *flat* index `% (Ny·Nx)`, which carries a column
+  overflow into the next row (a ~120% error on the apoferritin data); the readout wraps each axis.
+- **Per-BF scan-mean removal** (quantem's `_preprocess`). Subtracting each BF pixel's mean from
+  all its deposits is a convolution of the comb of position visits with the means placed at their
+  shifts, so it is applied at readout. With the per-frame mean the hot path already removes, this
+  is double-centering. On a complete, unupsampled wrap it changes nothing (every output pixel
+  receives each BF pixel once, and the means sum to zero), but on apoferritin it changes a half
+  scan by 22% (25–37% next to the scan front, where the static BF pattern piles up) and a complete
+  upsampling-2 scan by 10% (removing 42% of its Nyquist power).
+- **Coverage** is the comb convolved with the shift histogram.
+
+The live cadence is `--live-every` seconds (0.2 ≈ 23 rows of a 1024² scan at 120 kHz) or, with
+`--live-every-rows N`, every N scan rows. `result()` stays the raw sum (`parallax_recon.npy`).
+
+## Detector orientation
+
+The geometry describes the detector by the scan/detector rotation plus an optional column flip
+(LiberTEM-parallax's convention). A transposed or mirrored detector is one of 8 layouts; name it
+with `--detector-layout` (raw axis 0, raw axis 1) and the matching rotation is added to
+`--rotation` and the flip set:
+
+| `--detector-layout` | raw frame | rotation added | column flip |
+|---|---|---|---|
+| `rows,cols` | canonical | 0 | no |
+| `rows,-cols` | `c[:, ::-1]` | 0 | yes |
+| `-rows,cols` | `c[::-1, :]` | +180° | yes |
+| `-rows,-cols` | `c[::-1, ::-1]` | +180° | no |
+| `cols,rows` | `c.T` | +90° | yes |
+| `cols,-rows` | `c.T[:, ::-1]` | +90° | no |
+| `-cols,rows` | `c.T[::-1, :]` | −90° | no |
+| `-cols,-rows` | `c.T[::-1, ::-1]` | −90° | yes |
+
+`--flip-cols` sets the flip alone. `--center` is always measured on the raw frames; without it,
+`--detector-layout` maps the canonical frame center onto the raw frame. That is why no even-grid
+parity correction is needed (LiberTEM-parallax's `n_rot` block, which also fires for any
+|rotation| ≥ 45°): a reversed even axis moves the center by one pixel, and the center carries it.
+`tests/test_orientation.py` reproduces the canonical reconstruction exactly for all 8 layouts,
+including non-square and odd detectors and the apoferritin data.
+
+## Continuous scanning (live tuning)
+
+The tuning workflow runs as follows:
+
+1. Set the scan (e.g. 256×256), the *target* aberrations (`--defocus`, `--rotation`, `--c12`,
+   `--phi12`) and the readout (cadence, `--lowpass`; both the parallax and the phase-flipped
+   channel are always computed).
+2. Start an acquisition that scans continuously.
+3. The operator turns focus, stigmators and scan rotation on the microscope until the image is
+   best. At that point the microscope matches the targets.
+
+That needs `--accumulate latest`:
+
+```bash
+python -m realtime_stem.apps.run --accumulate latest --scan 256 256 --binned \
+    --defocus=<Å> --rotation <degrees> --lowpass 0.1 --live-every-rows 32 \
+    --endpoint tcp://<DCU_IP>:31001 --n-connections 3 --live-endpoint tcp://0.0.0.0:5601
+```
+
+- **What the image holds.** Each scan position keeps only its newest frame. When a position is
+  scanned again, its new deposits minus its stored ones are added at the same output pixels (the
+  shifts don't change). So the image is always exactly the reconstruction of the last full pass:
+  mid-pass, the current pass down to the scan cursor and the previous pass below it. A knob change
+  is fully reflected one pass later (0.55 s for 256² at 120 kHz, 8.7 s for 1024²). The newest
+  bright-field values are stored on the device: positions × M × 2 bytes for uint16 frames (the
+  run prints the size), e.g. 160 MB for 256² and 2.6 GB for 1024² at M ≈ 1250. The cost is one
+  extra gather per batch, ~1.2–1.5× the plain sum (`scripts/bench_accumulator.py`).
+- **How the detector numbers frames.** For one long series, image ids run past the scan and are
+  mapped back onto it (`id % positions`). For one series per pass, add `--continuous`: the same
+  reconstruction is kept across series, and each series continues the pass count. Either way the
+  live metadata carries `pass` and `progress` (the scan cursor), shown in the viewer title as
+  "pass 3 at 47% (latest)". The final frame is published only when the run ends.
+- **`--accumulate all`** keeps every frame of every pass (averaging once the microscope is
+  settled); the default `scan` is one reconstruction per series, as before.
+- **Batch size.** With `latest`, a batch must not hold the same position twice, so
+  `--batch-size` ≤ scan positions (enforced).
+- **Cadence.** "Rows per update" is `--live-every-rows N`; the alternative is `--live-every`
+  seconds. Each snapshot costs a few ms on the GPU.
+- **Notebook history.** The notebook view keeps only its last `history` frames (default 64,
+  `LiveView(endpoint, history=N)`, 0 = none), so a long tuning session doesn't grow memory.
+
+**What the operator should look at.** This was simulated with `tools/simulate_4dstem.py
+--passes 8 --defocus -2000 --defocus-schedule -4000 -3500 -3000 -2500 -2000 -1500 -2000 -2000`:
+a 128² scan whose defocus walks towards the −2000 Å target, overshoots, and comes back.
+
+- **Far from the target**, each bright-field image lands somewhere else, so the particles
+  ghost into doubled shells. That is obvious by eye.
+- **Within ~±500 Å** (a few depths of field; λ/α² ≈ 200 Å at 10 mrad and 300 keV) the change is
+  subtle by eye, and a display low-pass hides it further. Judge fine detail with little or no
+  `--lowpass`.
+- **A scalar figure of merit is unambiguous.** It is the parallax variance loss: the spread of the
+  shifted bright-field images at each output pixel (quantem's `residual_loss`). Its complement,
+  "BF consistency" (1 − loss):
+
+  | microscope C10 (Å) | −4000 | −3500 | −3000 | −2500 | −2000 | −1500 | −2000 | −2000 |
+  |---|---|---|---|---|---|---|---|---|
+  | BF consistency | 0.0009 | 0.0009 | 0.0012 | 0.0022 | 0.0038 | 0.0020 | 0.0039 | 0.0038 |
+
+  It peaks at the target from both sides; the overshoot drops back to the −2500 Å level. It isn't
+  in the live stream yet; it would cost one more scatter per batch.
+
+## Commissioning on the microscope
+
+The automated suite covers the mechanics on simulated data, on cpu/mps, and on CUDA where available:
+
+- `tests/test_continuous.py` checks the cases that matter for tuning:
+  - `latest` equals the newest frame per position, for whole and partial passes, any batching,
+    one long series or one series per pass, and upsampling 1 and 2;
+  - no drift over 40 passes;
+  - `all` equals the sum of every pass;
+  - the runner keeps one image across series and publishes the final frame only at the end;
+  - on a simulated focus walk the live image converges to, then equals, the target
+    reconstruction.
+- `tests/test_simulate.py` pins the simulator's conventions.
+
+What only the real system can show, in order:
+
+1. **On the GPU machine, before the session.** Run `pytest tests/` (the CUDA variants run there).
+   Then replay a multi-pass capture of the session geometry through the Holoscan ingest at full
+   rate:
+   - make it with `python -m tools.simulate_4dstem --scan 256 256 --passes 10
+     --defocus-schedule … --format dstream --out tuning256`;
+   - reconstruct with `run.py $(cat tuning256.flags)` and the viewer;
+   - feed it with `tools/replay_to_zmq.py --fast`.
+
+   Check that the sink rate is ≥ 120 kHz with `--accumulate latest`, all frames arrive, the live
+   cadence holds, and GPU memory stays flat. Run `scripts/bench_accumulator.py` for the per-batch
+   cost.
+2. **How the DCU numbers a continuous scan.** Arm it exactly as the session will (SerialEM /
+   DCU settings) and run with `--accumulate latest` and the viewer. Check:
+   - no `image_id >= scan positions` errors;
+   - the pass counter steps and the cursor sweeps 0→100% once per scan, in step with the beam;
+   - the sink's frame count matches what the DCU reports (no drops);
+   - whether ids run on in one series, or restart per series (then add `--continuous`).
+3. **Frames map onto raster positions in every pass.** Scan a static, featureful area for
+   many passes and compare the pass images (save them, or take `view.snapshot_at(1.0,
+   scan_pass=k)` in a notebook). Real drift moves the image smoothly by sub-pixel amounts. A jump
+   or roll by whole pixels or rows from pass to pass means the scan generator sends frames that
+   aren't positions (fly-back or settling triggers), which `id % positions` cannot absorb.
+4. **Orientation and center.**
+   - Record one scan at a known defocus with
+     `python3 tools/record_stream.py capture --ip <DCU_IP> --out s1.dstream` (with nothing else
+     listening).
+   - Measure `--center` on the raw frames.
+   - Find `--detector-layout` / `--rotation` offline by replaying it (`run.py --source s1.dstream
+     …`) and comparing the 8 layouts and a rotation sweep.
+5. **Knob sign and scale.** Set the target C10 to the microscope's readout. Sweep the focus knob
+   through it in known steps; the best image should sit at the readout. An offset or mirror tells
+   you the defocus sign convention (C10 = −Δf in abTEM's convention) or a center/rotation error.
+   Repeat for stigmation (target C12 = 0) and scan rotation.
+6. **Latency.** Step the focus and time until the live image settles: it should be one pass plus
+   one live interval.
+7. **Long run.** Tune continuously for 30–60 minutes at full rate. Check that the rate, GPU
+   memory and the stream stay steady.
+
+## Simulated data
+
+`tools/simulate_4dstem.py` makes parallax datasets of any size with known ground truth (torch, on
+cuda/mps/cpu; a 256×256 scan of 96×96 frames takes ~40 s on an M4 Pro):
+
+```bash
+python -m tools.simulate_4dstem --scan 256 256 --out out/sim256 \
+    [--defocus -2000 --rotation -15 --semiangle 10 --angular-sampling 0.5 --scan-step 2 \
+     --dose 2000 --detector-layout rows,cols --c12 ... --phi12 ...]
+```
+
+It is a single-slice, pure-phase simulation. Shells and blobs on a weak background form a
+periodic phase object; the probe is `IFFT(A exp(-iχ))` (abTEM's convention, C10 < 0 =
+underfocus). The far-field intensity is integrated into detector pixels on a 3–5× finer k-grid,
+rotated into the detector frame, re-laid per `--detector-layout` and Poisson-sampled.
+
+**Repeated scans** model a tuning session: `--passes N` scans the same area N times in one
+series (image ids run on past the scan, as from a continuously scanning detector), and
+`--defocus-schedule` / `--c12-schedule` set the microscope's *actual* C10 / C12 on each pass while
+`--defocus` / `--c12` stay the algorithm's target. The `.flags` then include `--accumulate latest`.
+
+It writes `<out>.npy` and/or `<out>.dstream` (real Stream2 framing, bslz4), `<out>_phase.npy`
+(the ground truth on the scan grid), `<out>.json` and `<out>.flags`. The `.flags` file holds the
+exact `run.py` geometry flags, including the effective scan step (positions sit on the simulation
+grid).
+
+`tests/test_simulate.py` pins that the simulator and the reconstruction share conventions. The
+parallax criterion is quantem's variance loss: the spread across the shifted BF images at each
+output pixel. It is smallest at the simulated C10 and rotation, not at the opposite sign or ±10°.
+
+## Benchmark
+
+`scripts/bench_accumulator.py` times `process()` on device-resident batches, the share spent on
+the readout side accumulators, and one `snapshot()`, with device synchronization. On an Apple M4
+Pro, 2048-frame batches of 96×96 frames, 1024² scan:
+
+| device | M (BF pixels) | `--accumulate all` | `--accumulate latest` | side accumulators | snapshot |
+|---|---|---|---|---|---|
+| mps | 1249 | ~970 kHz | ~635 kHz | 2% | ~2–4 ms |
+| mps | 49 | ~5 MHz | ~5–9 MHz | 7–10% | ~2–4 ms |
+| cpu | 1249 | ~360 kHz | ~300 kHz | 2% | ~25 ms |
+
+Even a laptop GPU accumulates far faster than 120 kHz: the end-to-end rate is set by the
+ingest, not the parallax arithmetic (see "Batch size and rate" and "Scheduler" under Known
+issues). For the end-to-end rate on a given machine, replay a recording with
+`scripts/check_install.sh`.
 
 ## Known issues and limitations
 
@@ -184,7 +473,8 @@ with `tools/replay_to_zmq.py`; keep the microscope settings of each recording ne
   polling (idle workers sleep up to 5 ms), not the GPU.
 - **Scheduler.** Since 2.0.2 the default is Holoscan's single-threaded scheduler
   (`--scheduler-threads 0`): it runs the three operators one after another without sleeping, while
-  ZeroMQ keeps receiving in its own I/O thread. On the test machine (IGX Orin, RTX 6000 Ada) it was faster in every test (1024²
+  ZeroMQ keeps receiving in its own I/O thread. On the test machine (IGX Orin, RTX 6000 Ada) it
+  was faster in every test (1024²
   binned: full speed 166–168 kHz against 149–151 with 4 threads; paced at 120 kHz 120.5 kHz
   against 113.5, i.e. 4 threads end a scan about 0.5 s late; busy machine 117–120 against 96–114)
   and uses less CPU. `--scheduler-threads 4` gives the `MultiThreadScheduler` of 1.0.0–2.0.1.
@@ -196,8 +486,8 @@ with `tools/replay_to_zmq.py`; keep the microscope settings of each recording ne
   four times as many pixels but run at most at 30 kHz (the DCU's shortest unbinned frame time is
   33.3 µs), so their data rate is of the same order. `DCU=tcp://<DCU_IP>:31001
   scripts/check_install.sh` prints the link speed.
-- **Busy machine.** With 8 of the test machine's 12 cores kept busy by other programs, every scan was
-  still complete. With the 4-thread scheduler the pipeline fell up to 2 s behind by the end of a
+- **Busy machine.** With 8 of the test machine's 12 cores kept busy by other programs, every scan
+  was still complete. With the 4-thread scheduler the pipeline fell up to 2 s behind by the end of a
   1024² scan at a paced 120 kHz (the backlog waits in the receive queues, room for 150k frames,
   then in the DCU's buffer, which is finite); the single-threaded default kept up (117–120 kHz).
   On a shared server, also keep the container on cores of its own (`docker run --cpuset-cpus`),
@@ -213,6 +503,13 @@ with `tools/replay_to_zmq.py`; keep the microscope settings of each recording ne
   reports the scan as incomplete). The DCU counts
   them: `GET http://<DCU_IP>/stream/api/1.8.0/status/dropped`. In `--continuous` mode the
   connection stays open between scans.
+- **Continuous scanning assumes one frame per scan position.** `--accumulate latest | all` map
+  image id → position as `id % positions`. A scan generator that adds fly-back or settling
+  triggers between lines or passes breaks that mapping (commissioning test 3 detects it).
+- **`--accumulate latest` costs memory and time.** It keeps every position's newest frame on the
+  device (positions × bright-field pixels × 2 bytes: 160 MB at 256², 2.6 GB at 1024²) and costs
+  about 1.2–1.5× the plain sum. Check the rate on your GPU with a replay
+  (`scripts/check_install.sh`) before relying on it at full detector rate.
 - **One consumer per DCU stream.** The DCU's PUSH socket load-balances across every connected PULL
   peer, so a second listener (or a crashed one's leftover connection) silently takes a share of
   the frames. The run's completeness report shows it as missing positions.
@@ -227,7 +524,8 @@ The pipeline depends only on the two contracts in `realtime_stem/processing/base
 method (e.g. strain mapping) is self-contained:
 
 1. Implement an `Accumulator`: `process(frames, ids)` folds a batch into the reconstruction-so-far;
-   `result()` returns it; expose `detector_shape` / `scan_shape`.
+   `result()` returns it; expose `detector_shape` / `scan_shape`. Optionally add
+   `snapshot() -> (stack, channel_names, meta)` to stream several named images per live frame.
 2. Implement an `Algorithm`: declare its CLI flags, build the accumulator from them, save results.
 3. Register it in `realtime_stem/processing/registry.py`.
 
@@ -239,39 +537,75 @@ reference implementation to copy from.
 ```
 realtime_stem/
   ingest/holoscan_graph.py     ZmqRxOp → DecompressGpuOp → GenericSinkOp (drives any Accumulator)
+  ingest/python_ingest.py      the pure-Python ingest: ZMQ or .dstream/.npy, CPU decode
+  ingest/codec.py              DECTRIS Stream2 CBOR + bslz4 decode/encode on the CPU
+  ingest/sink.py               BatchSink: the hot-path bookkeeping both ingests share
+  ingest/dstream.py            the .dstream capture format
   processing/base.py           the Accumulator + Algorithm contracts
   processing/registry.py       --algorithm name → Algorithm
-  processing/parallax/         engine (geometry + accumulator), config, algorithm
+  processing/parallax/         engine (geometry + accumulator), readout (live channels),
+                               orientation (detector layouts), config, algorithm
   streaming/live_stream.py     pack/unpack + PUB/SUB (CONFLATE) transport
+  streaming/display.py         PanelFigure: the live-frame rendering shared by the viewers
+  streaming/notebook.py        LiveView: the Jupyter subscriber
   apps/run.py                  the runner (transport flags + continuous/rounds loop)
-tools/                         .dstream format, stream recorder, replay feeder, synthetic-capture generator
-examples/                      viewer, headless probe, static result plot
-tests/                         parallax oracle tests, streaming transport tests, runner CLI tests
+tools/                         .dstream CLI, stream recorders, replay feeder, npy→.dstream, 4D-STEM
+                               simulator (incl. multi-pass focus walks), synthetic-capture generator
+scripts/                       machine check, replay demos (Docker / local), accumulator benchmark,
+                               CLI-reference generator
+examples/                      viewer, notebook (live_view.ipynb), headless probe, static result plot
+tests/                         parallax oracle tests, readout/orientation/codec/ingest/simulator
+                               tests, streaming transport tests, runner CLI tests
 operators/                     the C++/CUDA Holoscan operators (ZmqRxOp, DecompressGpuOp), MIT
 docker/Dockerfile              builds the complete image: Holoscan base + operators + pyzmq
 docs/GUIDE.md                  this guide
+docs/CLI.md                    every command-line parameter (generated: scripts/gen_cli_reference.py)
+CHANGELOG.md                   what changed between versions
 ```
 
 ## Tests
 
-Pure-Python (no detector, no container). From the repo root, in an environment with numpy + torch
-+ pyzmq:
+Pure-Python (no detector, no container). From the repo root:
 
 ```bash
+pip install -e ".[local,dev,oracles]"
 python -m pytest tests/
 ```
 
-The GPU-parity test runs where CUDA is available and skips cleanly otherwise. The parallax tests
-pin the engine against a float64 transcription of the reference math and pin the CLI unit
-conversions.
+Device-parametrized tests run on cpu, and on `mps` / `cuda` where available; the GPU-parity test
+skips cleanly without CUDA.
+
+- The parallax tests pin the engine against a float64 transcription of the reference math and
+  pin the CLI unit conversions.
+- The readout tests pin the live channels against the streamed reference kernel, a batch
+  double-centering oracle and brute-force coverage.
+- The orientation tests check all 8 detector layouts.
+- The codec tests check against bitshuffle, the DECTRIS decoder and the HDF5 bitshuffle filter
+  (the `oracles` extra; skipped if absent).
+- The ingest tests replay over ZMQ, including the multi-connection end race and back-to-back
+  scans, and round-trip the recorder.
+- The continuous-scanning tests pin `--accumulate latest` / `all` (see "Commissioning on the
+  microscope"), the notebook-view tests the bounded history and pass-aware snapshots.
+- `tests/test_cli_reference.py` fails if `docs/CLI.md` no longer matches the parsers, or a
+  parameter has no description.
+- The simulator tests pin the shared conventions through the parallax variance criterion.
+- A stub-Holoscan test drives the `GenericSinkOp` wrapper without the container.
 
 ## Credits and relation to the reference
 
-The real-time parallax / tcBF algorithm is the work of Georgios Varnavides. This implementation
-follows his streaming-parallax reference and reproduces its output on the public apoferritin
-dataset (Zenodo 10.5281/zenodo.18346854) to float32 precision. The scatter wraps `% Ny` and `% Nx`
-independently, and the one-pixel bright-field-index correction for quarter-turn rotations is not
-applied, because here the disk position is the measured `--center`.
+The real-time parallax / tcBF algorithm is the work of Georgios Varnavides, as are the live
+phase flip, the detector orientation and the continuous-scanning modes added in 2.1.0. This
+implementation follows his streaming-parallax reference and reproduces its output on the public
+apoferritin dataset (Zenodo 10.5281/zenodo.18346854) to float32 precision. Implementation choices:
+
+- The scatter wraps `% Ny` and `% Nx` independently.
+- The phase flip is applied to the accumulated image at each snapshot rather than per frame; it
+  is the same operator (see "Live channels").
+- The one-pixel bright-field-index correction for quarter-turn rotations is not applied, because
+  here the disk position is the measured `--center` (see "Detector orientation").
+
+The per-BF scan-mean removal, the moments behind `--normalize`, and the Fourier filters follow
+quantem's `DirectPtychographyMontage`.
 
 The GPU ingest (`operators/`) is built on the Holoscan operators from
 [electronmicroscopy/live4d](https://github.com/electronmicroscopy/live4d) (Denis Leshchev,

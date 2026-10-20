@@ -16,45 +16,20 @@ writes them.
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
-# Streaming-container magic. Bump the trailing digit if the record layout ever changes.
-MAGIC = b"DSTREAM1"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # repo root → `import realtime_stem`
 
-
-def write_magic(fh) -> None:
-    fh.write(MAGIC)
-
-
-def write_record(fh, raw: bytes) -> None:
-    fh.write(len(raw).to_bytes(4, "little"))
-    fh.write(raw)
-
-
-def is_dstream(path) -> bool:
-    """True if `path` is a `.dstream` capture (cheap magic-byte sniff)."""
-    with open(path, "rb") as fh:
-        return fh.read(len(MAGIC)) == MAGIC
-
-
-def iter_records(path):
-    """Yield each raw message from a `.dstream`, streaming with bounded memory.
-
-    A short read (truncated tail from an interrupted capture) ends iteration cleanly rather than
-    raising — the records read so far are still valid.
-    """
-    with open(path, "rb") as fh:
-        if fh.read(len(MAGIC)) != MAGIC:
-            raise ValueError(f"{path}: not a DSTREAM capture (bad magic).")
-        while True:
-            header = fh.read(4)
-            if len(header) < 4:
-                return
-            n = int.from_bytes(header, "little")
-            payload = fh.read(n)
-            if len(payload) < n:
-                return  # truncated final record
-            yield payload
+# The record format itself lives in the package (the pure-Python ingest reads captures directly);
+# re-exported here so `tools.*` and existing imports keep working.
+from realtime_stem.ingest.dstream import (  # noqa: E402,F401
+    MAGIC,
+    is_dstream,
+    iter_records,
+    write_magic,
+    write_record,
+)
 
 
 def scan_index(path):
@@ -109,11 +84,18 @@ def info(path) -> None:
           f"first={envelope_type(first)!r}, last={envelope_type(last)!r}, {size_mb:,.1f} MB")
 
 
-def main() -> None:
-    p = argparse.ArgumentParser(description="Inspect a .dstream capture.")
+def build_parser() -> argparse.ArgumentParser:
+    """The command-line interface (also rendered into docs/CLI.md)."""
+    p = argparse.ArgumentParser(
+        prog="python -m tools.dstream", description="Inspect a .dstream capture.")
     sub = p.add_subparsers(dest="cmd", required=True)
     ic = sub.add_parser("info", help="print a summary of a capture file")
-    ic.add_argument("file")
+    ic.add_argument("file", help="The .dstream capture.")
+    return p
+
+
+def main() -> None:
+    p = build_parser()
     args = p.parse_args()
     if args.cmd == "info":
         info(args.file)

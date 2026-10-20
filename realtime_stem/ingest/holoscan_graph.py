@@ -15,14 +15,13 @@ See `apps/run.py` for the command line and the README for the docker invocation.
 
 from __future__ import annotations
 
-import time
-
 import torch
 from holoscan.core import Application, Operator, OperatorSpec
 
 import dectris_holoscan_ops
 from dectris_holoscan_ops import DecompressGpuOp, ZmqRxOp
 
+from realtime_stem.ingest.sink import BatchSink
 from realtime_stem.processing.base import Accumulator
 
 #: Version of the compiled operators in this image (None: built before 2.0, without the
@@ -50,28 +49,16 @@ def _get_tensor(message, name: str):
 
 
 class GenericSinkOp(Operator):
-    """Feed decompressed batches into any `Accumulator`; print throughput periodically; optionally
-    PUB throttled live snapshots of the reconstruction-so-far."""
+    """Feed decompressed batches into any `Accumulator` via the shared `BatchSink` (throughput
+    prints and throttled live snapshots live there, identical for the pure-Python ingest)."""
 
     def __init__(self, fragment, *args, acc: Accumulator, print_every: int = 50,
-                 live_publisher=None, live_every: float = 0.2, name: str = "sink"):
+                 live_publisher=None, live_every: float = 0.2, live_every_rows: int = 0,
+                 name: str = "sink"):
         super().__init__(fragment, *args, name=name)
         self.acc = acc
-        self.print_every = print_every
-        self._start = None
-        self._batches = 0
-        self._frames = 0
-        self._n_positions = acc.scan_shape[0] * acc.scan_shape[1]
-        # Which scan positions have received a frame (on the GPU; one tiny scatter per batch).
-        # The end-of-scan report counts missing positions and duplicate frames from it.
-        self._seen = torch.zeros(self._n_positions, dtype=torch.bool, device="cuda")
-        self.live_publisher = live_publisher
-        # Lazy import so the default (no live) path never touches zmq.
-        if live_publisher is not None:
-            from realtime_stem.streaming.live_stream import Throttle
-            self._throttle = Throttle(live_every)
-        else:
-            self._throttle = None
+        self.core = BatchSink(acc, print_every=print_every, live_publisher=live_publisher,
+                              live_every=live_every, live_every_rows=live_every_rows)
 
     def setup(self, spec: OperatorSpec) -> None:
         spec.input("input")
@@ -80,59 +67,16 @@ class GenericSinkOp(Operator):
         message = op_input.receive("input")
         frames = _tensor_from_dlpack(_get_tensor(message, "frames"))
         # ids stay on the device: a .cpu().numpy() here would cost a full D2H round trip per batch
-        # (the engine would re-upload them) and cut throughput.
+        # (the engine would re-upload them) and cut throughput. BatchSink's id guard is the
+        # cross-stream fence — see the comment there.
         ids = _tensor_from_dlpack(_get_tensor(message, "image_ids")).to(torch.long)
-
-        if self._start is None:
-            self._start = time.perf_counter()
-
-        # Real ids from the stream (not assumed-sequential). Guard against a scan-shape
-        # mismatch before they hit a GPU indexed op (device asserts are opaque). int() of a
-        # device max is a scalar sync — far cheaper than shipping the whole array to host.
-        #
-        # That scalar sync is also the pipeline's only cross-stream fence: the accumulator's
-        # torch work runs on torch's stream while DecompressGpuOp writes its 3-slot output
-        # pool on its own CUDA stream, and this sync waits for the PREVIOUS batch's scatter
-        # before the pool slot can be recycled under it. If you ever remove the guard, replace
-        # it with an explicit torch.cuda.synchronize()/event.
-        if ids.numel() and int(ids.max()) >= self._n_positions:
-            raise ValueError(
-                f"image_id {int(ids.max())} >= scan positions {self._n_positions} — "
-                f"--scan doesn't match the acquisition."
-            )
-        self.acc.process(frames, ids)
-        self._seen[ids] = True
-
-        self._batches += 1
-        self._frames += int(frames.shape[0])
-        if self._batches % self.print_every == 0:
-            elapsed = max(time.perf_counter() - self._start, 1e-9)
-            print(f"[sink] batches={self._batches} frames={self._frames} "
-                  f"fps={self._frames / elapsed:,.1f}", flush=True)
-
-        # Live preview: throttled snapshot of the reconstruction-so-far (D2H sync gated to ~5 Hz).
-        if self.live_publisher is not None and self._throttle.ready():
-            self.live_publisher.publish(self.acc.result())
+        self.core.feed(frames, ids)
 
     def summary(self) -> str:
-        if self._start is None:
-            return "[sink] no batches received"
-        elapsed = max(time.perf_counter() - self._start, 1e-9)
-        return (f"[sink] TOTAL frames={self._frames} batches={self._batches} "
-                f"elapsed={elapsed:.2f}s rate={self._frames / elapsed / 1e3:,.1f} kHz")
+        return self.core.summary()
 
     def completeness(self) -> tuple[bool, str]:
-        """(complete, one-line report): did every scan position receive exactly one frame?"""
-        covered = int(self._seen.sum()) if self._start is not None else 0
-        missing = self._n_positions - covered
-        duplicates = self._frames - covered
-        if missing == 0 and duplicates == 0:
-            return True, f"[sink] COMPLETE: all {self._n_positions} scan positions received"
-        parts = [f"{missing} missing"] if missing else []
-        if duplicates:
-            parts.append(f"{duplicates} frames for positions that already had one")
-        return False, (f"[sink] WARNING: INCOMPLETE SCAN: {covered} of {self._n_positions} scan "
-                       f"positions received ({', '.join(parts)}).")
+        return self.core.completeness()
 
 
 class IngestApp(Application):
@@ -140,7 +84,7 @@ class IngestApp(Application):
 
     def __init__(self, endpoint: str, batch_size: int, scheduler_threads: int,
                  acc: Accumulator, dtype: str = "uint16", n_connections: int = 3,
-                 live_publisher=None, live_every: float = 0.2):
+                 live_publisher=None, live_every: float = 0.2, live_every_rows: int = 0):
         super().__init__()
         self.endpoint = endpoint
         self.batch_size = batch_size
@@ -150,6 +94,7 @@ class IngestApp(Application):
         self.n_connections = n_connections
         self.live_publisher = live_publisher
         self.live_every = live_every
+        self.live_every_rows = live_every_rows
         self.sink: GenericSinkOp | None = None
 
     def compose(self) -> None:
@@ -201,7 +146,8 @@ class IngestApp(Application):
                       "connection (the DCU caps one connection below full rate; rebuild the "
                       "image from docker/Dockerfile for multi-connection)", flush=True)
         self.sink = GenericSinkOp(self, acc=self.acc, live_publisher=self.live_publisher,
-                                  live_every=self.live_every, name="sink")
+                                  live_every=self.live_every,
+                                  live_every_rows=self.live_every_rows, name="sink")
 
         self.add_flow(rx, decompress, {("output", "input")})
         self.add_flow(decompress, self.sink, {("output", "input")})

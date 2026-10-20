@@ -4,10 +4,13 @@ Real-time STEM processing at full detector frame rate. Frames stream from a DECT
 (through its detector control unit, the DCU), are decompressed on an NVIDIA GPU and folded into a
 reconstruction **while the scan is running**, so you watch the image fill in during the scan.
 
-The included method is **parallax / tilt-corrected bright field (tcBF)**. It runs at 120 kHz on
-binned (96×96) ARINA frames.
+The included method is **parallax / tilt-corrected bright field (tcBF)**, with a live
+**phase-flipped** image next to it. It runs at 120 kHz on binned (96×96) ARINA frames. Without a
+detector or an NVIDIA GPU, the same processing also runs on a laptop, on recorded or simulated
+data.
 
 - [`docs/GUIDE.md`](docs/GUIDE.md): the full technical guide
+- [`docs/CLI.md`](docs/CLI.md): every command-line option
 - [`CHANGELOG.md`](CHANGELOG.md): what changed between versions
 - [`AGENTS.md`](AGENTS.md): orientation for AI coding assistants
 
@@ -21,9 +24,9 @@ realtime_stem/        the Python package
   streaming/            publishes the live image
 operators/            the C++/CUDA frame receiver and GPU decompressor
 docker/Dockerfile     builds the Docker image
-examples/             live viewer, result plotting, sample recording
-tools/                stream recorder, replay
-scripts/              installation check and demo
+examples/             live viewer, notebook, sample recording
+tools/                stream recorder, replay, simulator
+scripts/              installation check and demos
 tests/                unit tests
 ```
 
@@ -65,14 +68,25 @@ python examples/viewer.py tcp://127.0.0.1:5601
 - `--scan` must match the scan.
 - `--defocus`, `--rotation` and `--center` set the sharpness; tune them on a recorded scan
   (`tools/record_stream.py`, see the guide).
+- `--detector-layout` handles a rotated or mirrored detector.
+- `--accumulate latest` keeps the image updating while the microscope scans continuously.
 - Results are saved in `out/`. Ctrl-C ends the run.
-- All options: add `--help` to the `run` command.
 
 ## Run without a detector
 
 ```bash
-scripts/run_replay_demo.sh          # replays a small sample scan
+scripts/run_replay_demo.sh          # in Docker: replays a small sample scan
 ```
+
+Without Docker or an NVIDIA GPU (CPU or Apple silicon):
+
+```bash
+pip install -e ".[local,viz,replay]"
+scripts/run_local_demo.sh           # simulates a scan, replays it and shows it
+```
+
+The live image can also be watched from Jupyter: see
+[`examples/live_view.ipynb`](examples/live_view.ipynb).
 
 ## Good to know
 
@@ -84,6 +98,7 @@ scripts/run_replay_demo.sh          # replays a small sample scan
 ## Tests
 
 ```bash
+pip install -e ".[local,dev,oracles]"
 python -m pytest tests/
 ```
 

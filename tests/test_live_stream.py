@@ -75,3 +75,40 @@ def test_pub_sub_delivers_latest_frame():
     finally:
         pub.close()
         sub.close()
+
+
+def test_pack_channels_and_meta_roundtrip():
+    stack = np.random.default_rng(0).random((2, 5, 6)).astype(np.float32)
+    meta = {"C10": -2000.0, "coverage": 0.25, "frames": 30}
+    out, header = unpack(pack(stack, seq=3, channels=["parallax", "phase_flipped"], meta=meta))
+    assert np.array_equal(out, stack)
+    assert header["channels"] == ["parallax", "phase_flipped"] and header["meta"] == meta
+    _, plain = unpack(pack(stack[0], seq=4))            # 2D frames keep the old header
+    assert "channels" not in plain and "meta" not in plain
+    import pytest
+    with pytest.raises(ValueError):
+        pack(stack, seq=5, channels=["only-one"])
+
+
+def test_final_frame_survives_immediate_close():
+    """The runner publishes the final snapshot and closes at once; a connected subscriber must
+    still get it (a zero linger used to discard whatever was still queued)."""
+    results = []
+    for trial in range(5):
+        endpoint = f"tcp://127.0.0.1:{5740 + trial}"
+        pub = LivePublisher(endpoint)
+        sub = LiveSubscriber(endpoint)
+        try:
+            time.sleep(0.3)                            # SUB slow-joiner settle
+            big = np.zeros((1024, 1024), dtype=np.float32)
+            pub.publish(big)                           # a live frame still in flight …
+            pub.publish(big + trial, final=True)       # … then the final one, and close at once
+            pub.close()
+            got = None
+            deadline = time.time() + 3
+            while time.time() < deadline and not (got and got[1]["final"]):
+                got = sub.recv_latest(timeout_ms=200) or got
+            results.append(bool(got and got[1]["final"] and got[0][0, 0] == trial))
+        finally:
+            sub.close()
+    assert all(results), results

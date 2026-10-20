@@ -19,12 +19,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # repo root on pa
 from examples._display import high_pass, robust_clim   # noqa: E402
 
 
-def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> argparse.ArgumentParser:
+    """The command-line interface (also rendered into docs/CLI.md)."""
+    p = argparse.ArgumentParser(
+        prog="python examples/plot_result.py", description=__doc__)
     p.add_argument("recon", help="Path to a reconstruction .npy (e.g. parallax_recon.npy).")
     p.add_argument("--save", default=None, help="Write a PNG here instead of opening a window.")
     p.add_argument("--high-pass", type=float, default=0.0, metavar="SIGMA_PX",
                    help="Gaussian high-pass sigma in pixels (0 = off).")
+    return p
+
+
+def main() -> None:
+    p = build_parser()
     args = p.parse_args()
 
     import matplotlib.pyplot as plt

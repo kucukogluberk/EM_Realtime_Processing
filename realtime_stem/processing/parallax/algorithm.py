@@ -8,16 +8,17 @@ ingest graph never mention parallax — they see only the `Algorithm` / `Accumul
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 
 from realtime_stem.processing.base import Accumulator, Algorithm
 from realtime_stem.processing.parallax.config import (
+    add_readout_args,
     add_tuning_args,
     config_from_args,
     join_negative_floats,
+    readout_from_args,
 )
 from realtime_stem.processing.parallax.engine import (
     ParallaxAccumulator,
@@ -30,23 +31,23 @@ class ParallaxAlgorithm(Algorithm):
 
     def add_cli_args(self, parser: argparse.ArgumentParser) -> None:
         # Geometry presets first, then the shared physics/tuning knobs.
-        parser.add_argument(
+        g = parser.add_argument_group("parallax geometry and target aberrations")
+        g.add_argument(
             "--detector", type=int, nargs=2, default=None, metavar=("HY", "HX"),
             help="Detector geometry (default: config, 192x192; --binned preset: 96x96). Changing "
                  "the detector changes the BF disk — set --angular-sampling to match the mode.")
-        parser.add_argument(
+        g.add_argument(
             "--binned", action="store_true",
             help="ARINA 2×2-binned preset: 96×96 detector, doubled angular sampling.")
-        add_tuning_args(parser)   # --defocus/--rotation/--upsampling/physics/--scan/--center
+        add_tuning_args(g)        # --defocus/--rotation/--upsampling/physics/--scan/--center
+        add_readout_args(parser)  # --no-phase-flip/--no-dc-correct/--normalize/filters
 
     def preprocess_argv(self, argv: list[str]) -> list[str]:
         # `--defocus -1.5e4` etc.: scientific-notation negatives read as flags otherwise.
         return join_negative_floats(argv)
 
     def build(self, args: argparse.Namespace) -> Accumulator:
-        cfg = config_from_args(args)
-        if args.detector is not None:
-            cfg = replace(cfg, detector_shape=(int(args.detector[0]), int(args.detector[1])))
+        cfg = config_from_args(args)   # incl. --detector / --binned / --detector-layout
 
         geo = preprocess_geometry(
             det_shape=cfg.detector_shape, scan_shape=cfg.scan_shape,
@@ -54,6 +55,7 @@ class ParallaxAlgorithm(Algorithm):
             semiangle_cutoff=cfg.semiangle_cutoff, angular_sampling=cfg.angular_sampling,
             aberration_coefs=cfg.aberration_coefs, rotation_angle=cfg.rotation_angle,
             upsampling_factor=cfg.upsampling_factor, probe_center=cfg.probe_center,
+            flip_cols=cfg.flip_cols,
         )
 
         rot_deg = 0.0 if cfg.rotation_angle is None else float(np.rad2deg(cfg.rotation_angle))
@@ -62,17 +64,40 @@ class ParallaxAlgorithm(Algorithm):
         print(f"[parallax] BF pixels = {geo.n_bf}, "
               f"C10 = {cfg.aberration_coefs.get('C10', 0.0):.4g} Å, rotation = {rot_deg:.4g}°, "
               f"max |shift| = {int(np.abs(geo.shifts).max())} px, upsampling = {cfg.upsampling_factor}, "
-              f"angular sampling = {cfg.angular_sampling[0]:.4g} mrad/px, disk center = {center_str}",
+              f"angular sampling = {cfg.angular_sampling[0]:.4g} mrad/px, disk center = {center_str}"
+              f"{', columns flipped' if cfg.flip_cols else ''}",
               flush=True)
 
-        return ParallaxAccumulator(geo, device="cuda")
+        mode = getattr(args, "accumulate", "scan")
+        acc = ParallaxAccumulator(geo, device=getattr(args, "device", None),
+                                  readout=readout_from_args(args),
+                                  accumulate="latest" if mode == "latest" else "all",
+                                  wrap_ids=mode != "scan")
+        if mode == "latest":
+            itemsize = 4 if getattr(args, "dtype", "uint16") == "uint32" else 2
+            print(f"[parallax] accumulate=latest: keeping the newest frame per scan position "
+                  f"(~{acc.store_bytes(itemsize) / 1e6:,.0f} MB on {acc.device}; the Python "
+                  f"ingest stores 32-bit)", flush=True)
+        return acc
+
+    # readout channel → saved file (the raw sum keeps its historical name)
+    _FILES = {"raw": "parallax_recon.npy", "parallax": "parallax_corrected.npy",
+              "phase_flipped": "parallax_phase_flipped.npy", "coverage": "parallax_coverage.npy"}
 
     def save(self, acc: Accumulator, out_dir: Path, tag: str = "") -> None:
-        recon = acc.result()
-        np.save(out_dir / "parallax_recon.npy", recon)                   # always the latest scan
+        """Save every readout channel; with a `tag` (continuous mode) also a numbered copy of each,
+        so a session keeps all its scans while the plain names always hold the latest one."""
+        out_dir.mkdir(parents=True, exist_ok=True)
+        images = acc.images() if hasattr(acc, "images") else {"raw": acc.result()}
+        names = []
+        for channel, image in images.items():
+            name = self._FILES.get(channel, f"parallax_{channel}.npy")
+            np.save(out_dir / name, image)
+            names.append(name)
+            if tag:
+                tagged = name.replace(".npy", f"_{tag}.npy")
+                np.save(out_dir / tagged, image)
+                names.append(tagged)
         np.save(out_dir / "parallax_shifts.npy", acc.geometry.shifts)   # parallax-specific extra
-        saved = "parallax_recon.npy + parallax_shifts.npy"
-        if tag:
-            np.save(out_dir / f"parallax_recon_{tag}.npy", recon)
-            saved += f" + parallax_recon_{tag}.npy"
-        print(f"[parallax] saved {saved} to {out_dir}", flush=True)
+        print(f"[parallax] saved {' + '.join(names)} + parallax_shifts.npy to {out_dir}",
+              flush=True)

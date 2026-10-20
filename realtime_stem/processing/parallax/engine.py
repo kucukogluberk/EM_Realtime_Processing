@@ -34,6 +34,27 @@ float32 precision). Two deliberate departures from the reference script:
 
 Frames are assumed **center-centered** (BF disk at `probe_center`, default the detector center),
 matching real detector frames and the fftshift correction baked into `bf_flat_inds`.
+
+Detector orientation follows LiberTEM-parallax: a transposed or reversed detector is described by
+`rotation_angle` plus `flip_cols` (LiberTEM's `detector_flip_cols`, i.e. `frames[..., ::-1]`). The
+flip costs nothing per frame here: it only mirrors the column of each BF pixel in `bf_flat_inds`.
+For a flipped or transposed layout give `probe_center` as measured on the raw frames.
+
+Besides the reconstruction itself the accumulator keeps two small side accumulators (the visits per
+scan position and the running per-BF-pixel sum) from which `snapshot()` derives the live channels
+— per-BF scan-mean removal, the phase-flipped image, coverage — see `readout.py`.
+
+Repeated scans (the microscope scanning continuously while the operator tunes it) are handled by
+two options. `wrap_ids` maps image ids past the end of the scan back onto it (id % positions), so
+one long series, or several series via `start_series()`, cover the scan again and again. And
+`accumulate` chooses what the image holds:
+
+- "all": the sum of every frame received (one scan, or an average over repeated ones);
+- "latest": only the most recent frame at each scan position. The bright-field values of the
+  newest frame per position are kept on the device; when a position is revisited, its new
+  contribution minus its stored one is deposited at the same (unchanged) output pixels, so the
+  image is always exactly the reconstruction of the last full scan pass, and follows changes on
+  the microscope within one pass. Costs an (positions × M) store and one extra gather per batch.
 """
 
 from __future__ import annotations
@@ -43,6 +64,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import torch
+
+from realtime_stem.processing.parallax.readout import Readout, ReadoutConfig
 
 __all__ = ["ParallaxGeometry", "preprocess_geometry", "ParallaxAccumulator"]
 
@@ -107,6 +130,10 @@ class ParallaxGeometry:
     sampling: tuple = (0.0, 0.0)        # detector real-space sampling (Å)
     upsampled_scan_sampling: tuple = (0.0, 0.0)
     aberration_coefs: dict = field(default_factory=dict)
+    rotation_angle: float | None = None # rad
+    semiangle_cutoff: float = 0.0       # mrad (the readout band limit)
+    flip_cols: bool = False
+    probe_center: tuple | None = None   # (row, col) px on the raw frame; None → frame center
 
     @property
     def n_bf(self) -> int:
@@ -125,6 +152,7 @@ def preprocess_geometry(
     rotation_angle: float | None = None,
     upsampling_factor: int = 1,
     probe_center: tuple[float, float] | None = None,
+    flip_cols: bool = False,
 ) -> ParallaxGeometry:
     """Build BF-pixel indices + integer parallax shifts from the acquisition geometry.
 
@@ -140,7 +168,11 @@ def preprocess_geometry(
         rotation_angle: scan/detector relative rotation in radians (None → none).
         upsampling_factor: integer output-grid upsampling (finer shifts); 1 → scan grid.
         probe_center: BF-disk center on the detector, (row, col) px — py4DSTEM's
-            (Center_X, Center_Y) from `get_probe_size`. None → the frame center.
+            (Center_X, Center_Y) from `get_probe_size`, measured on the raw frames. None → the
+            frame center (for `flip_cols`, the mirror of the canonical center, col W-1-W//2).
+        flip_cols: the detector's columns are reversed relative to the canonical (Q_rows, Q_cols)
+            layout — LiberTEM-parallax's `detector_flip_cols`. Combined with `rotation_angle` this
+            covers every transpose/flip (see the table in docs/GUIDE.md).
 
     Returns:
         ParallaxGeometry with `bf_flat_inds` (M,) and `shifts` (M, 2), plus metadata.
@@ -173,9 +205,14 @@ def preprocess_geometry(
     inds_i, inds_j = np.where(bf_mask)
     off_i = ((inds_i + gpts[0] // 2) % gpts[0]) - gpts[0] // 2
     off_j = ((inds_j + gpts[1] // 2) % gpts[1]) - gpts[1] // 2
+    # A column flip mirrors the tilt offsets about the center: the raw frame is `canonical[:, ::-1]`,
+    # so canonical column cj_c + off sits at raw column W-1-(cj_c+off) = cj_raw - off.
     ci = gpts[0] // 2 if probe_center is None else int(round(probe_center[0]))
-    cj = gpts[1] // 2 if probe_center is None else int(round(probe_center[1]))
-    det_i, det_j = ci + off_i, cj + off_j
+    if probe_center is not None:
+        cj = int(round(probe_center[1]))
+    else:
+        cj = gpts[1] - 1 - gpts[1] // 2 if flip_cols else gpts[1] // 2
+    det_i, det_j = ci + off_i, (cj - off_j if flip_cols else cj + off_j)
     ok = (det_i >= 0) & (det_i < gpts[0]) & (det_j >= 0) & (det_j < gpts[1])
     if not ok.all():  # disk clips the frame edge — those tilted views fall off the detector
         inds_i, inds_j, det_i, det_j = inds_i[ok], inds_j[ok], det_i[ok], det_j[ok]
@@ -191,16 +228,24 @@ def preprocess_geometry(
         upsampling_factor=int(upsampling_factor), upsampled_scan_gpts=upsampled_scan_gpts,
         wavelength=wavelength, sampling=sampling,
         upsampled_scan_sampling=upsampled_scan_sampling, aberration_coefs=dict(aberration_coefs),
+        rotation_angle=rotation_angle, semiangle_cutoff=float(semiangle_cutoff),
+        flip_cols=bool(flip_cols),
+        probe_center=None if probe_center is None else (float(probe_center[0]),
+                                                        float(probe_center[1])),
     )
 
 
 # ── accumulator (device torch) ─────────────────────────────────────────────────
 
 def _pick_device(device: str | None) -> torch.device:
-    """Default to CUDA when available (the edge box), else CPU (so tests run anywhere)."""
-    if device is not None:
+    """Default to CUDA when available (the edge box), then Apple's MPS, else CPU."""
+    if device is not None and device != "auto":
         return torch.device(device)
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
 
 
 class ParallaxAccumulator:
@@ -210,7 +255,8 @@ class ParallaxAccumulator:
         geom = preprocess_geometry(...)
         acc = ParallaxAccumulator(geom)
         acc.process(frames, ids)     # frames: (B, H, W) int/float; ids: (B,) scan indices
-        recon = acc.result()         # (Ny*U, Nx*U) host array
+        recon = acc.result()         # (Ny*U, Nx*U) host array — the raw shifted sum
+        stack, names, meta = acc.snapshot()   # live channels, see readout.py
 
     `process` accepts either host integer ndarrays or an integer/float torch tensor already on the
     device (GPU decode path, or a Holoscan DLPack sink) — the `Accumulator` contract shared by
@@ -218,7 +264,10 @@ class ParallaxAccumulator:
     """
 
     def __init__(self, geometry: ParallaxGeometry, device: str | None = None,
-                 measure: bool = False):
+                 measure: bool = False, readout: ReadoutConfig | None = None,
+                 accumulate: str = "all", wrap_ids: bool = False):
+        if accumulate not in ("all", "latest"):
+            raise ValueError(f"accumulate must be 'all' or 'latest', not {accumulate!r}")
         self.device = _pick_device(device)
         self.geometry = geometry
         self.detector_shape = tuple(geometry.detector_shape)
@@ -241,6 +290,27 @@ class ParallaxAccumulator:
         n = self._nyu * self._nxu
         self.out = torch.zeros(n, dtype=torch.float32, device=self.device)
 
+        # Side accumulators for the readout (O(B·M) adds per batch, no extra scatter): how many
+        # frames each scan position contributes (0/1 for "latest"), and each BF pixel's running
+        # sum of its frame-mean-subtracted values. The readout operators are built lazily, on the
+        # first snapshot.
+        self.n_positions = self.scan_shape[0] * self.scan_shape[1]
+        self._visits = torch.zeros(self.n_positions, dtype=torch.float32, device=self.device)
+        self._bf_sum = torch.zeros(geometry.n_bf, dtype=torch.float32, device=self.device)
+        self._n_frames = 0
+
+        # Repeated scans: ids past the scan wrap onto it; `_id_offset` continues the count across
+        # series whose ids restart at 0; `_max_id` (a device scalar, no per-batch sync) gives the
+        # scan pass and the cursor position for the live metadata.
+        self.accumulate = accumulate
+        self.wrap_ids = bool(wrap_ids)
+        self._id_offset = 0
+        self._max_id = torch.full((), -1, dtype=torch.long, device=self.device)
+        self._store: torch.Tensor | None = None     # "latest": newest raw BF values per position
+        self._store_kind: str | None = None
+        self.readout_config = readout if readout is not None else ReadoutConfig()
+        self._readout: Readout | None = None
+
         # Instrumentation (off by default): host prep, integer H2D copy, GPU cast+scatter, with
         # CUDA events so measurement doesn't perturb the run.
         self.measure = measure
@@ -262,6 +332,8 @@ class ParallaxAccumulator:
             # int64 widening, NOT an int32 bit-view: a bit-view turns values >= 2^31 negative,
             # and real ARINA uint32 frames carry a dtype-max (4294967295) pixel-mask sentinel.
             return torch.from_numpy(a.astype(np.int64))
+        if dt == np.float64 and self.device.type == "mps":
+            return torch.from_numpy(a.astype(np.float32))   # MPS has no float64
         if dt == np.uint8 or dt in (np.int8, np.int16, np.int32, np.float32, np.float64):
             return torch.from_numpy(a)
         return torch.from_numpy(a.astype(np.int32))  # e.g. uint16: safe widening
@@ -279,6 +351,8 @@ class ParallaxAccumulator:
 
         # Already a device tensor (GPU decode / Holoscan DLPack): no host prep, no H2D here.
         if isinstance(frames, torch.Tensor):
+            if frames.dtype == torch.float64 and self.device.type == "mps":
+                frames = frames.float()                       # MPS has no float64
             f = frames if frames.device == self.device else frames.to(self.device)
             if not self.measure:
                 self._accumulate_into(f, ids)
@@ -321,37 +395,75 @@ class ParallaxAccumulator:
             self._accumulate_into(t_int, ids)
             self._compute_s += time.perf_counter() - t1
 
+    def _gather(self, flat_f: torch.Tensor) -> tuple[torch.Tensor, str]:
+        """The (B, M) bright-field pixels of flat frames, still integer, and how to float them.
+
+        Gather BEFORE casting to float: only M of the H·W pixels survive, so casting the whole
+        batch first would allocate and write B·H·W floats per batch for nothing.
+        """
+        if flat_f.dtype == torch.uint16:
+            # uint16 is a second-class torch dtype with no CUDA gather kernel: reinterpret the
+            # bits as int16 (zero-copy view), gather the M columns, then recover the exact
+            # unsigned values on the small (B, M) slice (`_as_float`). float32 holds ≤ 2^24
+            # exactly, so 0..65535 round-trips exactly.
+            return flat_f.view(torch.int16)[:, self._bf_inds], "u16"
+        if flat_f.dtype == torch.uint32:
+            # Same trick for uint32 (what the ingest emits for the DCU's long-dwell modes, and
+            # equally second-class in torch): int32 bit-view, gather, undo the wrap on the small
+            # (B, M) slice. Values >= 2^24 round in float32 exactly as a direct cast would.
+            return flat_f.view(torch.int32)[:, self._bf_inds], "u32"
+        return flat_f[:, self._bf_inds], "plain"
+
+    @staticmethod
+    def _as_float(raw: torch.Tensor, kind: str) -> torch.Tensor:
+        """Gathered BF pixels → float32, per-frame mean (DC) removed."""
+        g = raw.float()
+        if kind == "u16":
+            g = torch.where(g < 0, g + 65536.0, g)
+        elif kind == "u32":
+            g = torch.where(g < 0, g + 4294967296.0, g)
+        return g - g.mean(dim=1, keepdim=True)
+
     def _accumulate_into(self, f: torch.Tensor, ids) -> None:
         # Gather the M bright-field pixels of every frame, remove the per-frame DC (mean over BF
         # pixels), then scatter-add each contribution to its parallax-shifted, toroidally-wrapped
         # output position. Independent % Ny / % Nx wraps = the correct scan-grid torus.
-        #
-        # Gather BEFORE casting to float: only M of the H·W pixels survive, so casting the whole
-        # batch first would allocate and write B·H·W floats per batch for nothing.
         b = f.shape[0]
-        flat_f = f.reshape(b, -1)
-        if flat_f.dtype == torch.uint16:
-            # uint16 is a second-class torch dtype with no CUDA gather kernel: reinterpret the
-            # bits as int16 (zero-copy view), gather the M columns, then recover the exact
-            # unsigned values on the small (B, M) slice. float32 holds ≤ 2^24 exactly, so
-            # 0..65535 round-trips exactly.
-            g16 = flat_f.view(torch.int16)[:, self._bf_inds].float()
-            i_bf = torch.where(g16 < 0, g16 + 65536.0, g16)    # (B, M)
-        elif flat_f.dtype == torch.uint32:
-            # Same trick for uint32 (what the ingest emits for the DCU's long-dwell modes, and
-            # equally second-class in torch): int32 bit-view, gather, undo the wrap on the small
-            # (B, M) slice. Values >= 2^24 round in float32 exactly as a direct cast would.
-            g32 = flat_f.view(torch.int32)[:, self._bf_inds].float()
-            i_bf = torch.where(g32 < 0, g32 + 4294967296.0, g32)   # (B, M)
-        else:
-            i_bf = flat_f[:, self._bf_inds].float()            # (B, M)
-        i_bf = i_bf - i_bf.mean(dim=1, keepdim=True)
+        raw, kind = self._gather(f.reshape(b, -1))
+        i_bf = self._as_float(raw, kind)                       # (B, M)
+        self._n_frames += b
 
         if isinstance(ids, torch.Tensor):
             # Device ids from the Holoscan sink — keep them on-device (no numpy round trip).
             idx = ids.to(device=self.device, dtype=torch.long, non_blocking=True)
         else:
             idx = torch.as_tensor(np.asarray(ids), dtype=torch.long, device=self.device)
+        if self.wrap_ids:
+            idx = idx + self._id_offset
+            self._max_id = torch.maximum(self._max_id, idx.max())
+            idx = idx % self.n_positions
+        else:
+            self._max_id = torch.maximum(self._max_id, idx.max())
+
+        if self.accumulate == "latest":
+            # Replace each position's previous frame: deposit (new − old) at the same pixels.
+            # The store keeps the raw gathered integers, so the old contribution is recomputed
+            # exactly as it was deposited (never-visited positions hold zeros → contribute 0).
+            # Assumes a batch holds each position at most once (batch ≤ scan positions).
+            if self._store is None:
+                self._store = torch.zeros((self.n_positions, raw.shape[1]), dtype=raw.dtype,
+                                          device=self.device)
+                self._store_kind = kind
+            elif kind != self._store_kind or raw.dtype != self._store.dtype:
+                raise ValueError(f"frame dtype changed mid-stream ({raw.dtype}, {kind}) — "
+                                 f"the stored frames are {self._store.dtype}")
+            i_bf = i_bf - self._as_float(self._store[idx], kind)
+            self._store[idx] = raw
+            self._visits[idx] = 1.0
+        else:
+            self._visits.index_add_(0, idx, torch.ones_like(idx, dtype=torch.float32))
+        self._bf_sum += i_bf.sum(dim=0)
+
         yt = (idx // self._nx) * self._u                       # (B,)
         xt = (idx % self._nx) * self._u
         oy = (yt.view(-1, 1) + self._sy.view(1, -1)) % self._nyu   # (B, M)
@@ -360,8 +472,64 @@ class ParallaxAccumulator:
         self.out.index_add_(0, flat, i_bf.reshape(-1))
 
     def result(self) -> np.ndarray:
-        """The parallax / tcBF reconstruction as a (Ny*U, Nx*U) host array."""
+        """The raw parallax / tcBF sum as a (Ny*U, Nx*U) host array (no readout processing)."""
         return self.out.reshape(self.upsampled_scan_gpts).cpu().numpy()
+
+    def start_series(self) -> None:
+        """A new detector series begins (the runner calls this per round). With `wrap_ids`, its
+        ids — which restart at 0 — continue after the last pass seen instead of overlapping it."""
+        if self.wrap_ids:
+            max_id = int(self._max_id)
+            if max_id >= 0:
+                self._id_offset = (max_id // self.n_positions + 1) * self.n_positions
+
+    def store_bytes(self, itemsize: int = 2) -> int:
+        """Device memory the "latest" store needs (or holds), in bytes."""
+        if self._store is not None:
+            return self._store.numel() * self._store.element_size()
+        return self.n_positions * self.geometry.n_bf * itemsize if self.accumulate == "latest" else 0
+
+    def _window_frames(self) -> int:
+        """Frames currently in the image: all received, or one per visited position."""
+        if self.accumulate == "latest":
+            return int(self._visits.sum())
+        return self._n_frames
+
+    def channels(self) -> dict[str, torch.Tensor]:
+        """The readout channels (`parallax`, `phase_flipped`, …) as device tensors."""
+        if self._readout is None:
+            self._readout = Readout(self.geometry, self.readout_config, self.device)
+        return self._readout.compute(self.out, self._visits, self._bf_sum, self._window_frames())
+
+    def snapshot(self) -> tuple[np.ndarray, list[str], dict]:
+        """The live channels as one (C, Ny*U, Nx*U) float32 host stack, their names, and metadata.
+
+        The optional `Accumulator` snapshot hook: the ingest sink publishes this when present.
+        """
+        ch = self.channels()
+        names = list(ch)
+        stack = torch.stack([ch[k] for k in names]).float().cpu().numpy()
+        geo = self.geometry
+        max_id = int(self._max_id)
+        meta = {
+            "C10": float(geo.aberration_coefs.get("C10", 0.0)),
+            "rotation_deg": (0.0 if geo.rotation_angle is None
+                             else round(float(np.rad2deg(geo.rotation_angle)), 6)),
+            "upsampling": self._u,
+            "frames": self._n_frames,
+            "coverage": float((self._visits > 0).float().mean()),
+            "accumulate": self.accumulate,
+            # the scan cursor: which pass over the scan (0-based) and how far into it
+            "pass": max(max_id, 0) // self.n_positions,
+            "progress": 0.0 if max_id < 0 else (max_id % self.n_positions + 1) / self.n_positions,
+        }
+        return stack, names, meta
+
+    def images(self) -> dict[str, np.ndarray]:
+        """Every saved image as host arrays: the raw sum plus the readout channels."""
+        out = {"raw": self.result()}
+        out.update({k: v.float().cpu().numpy() for k, v in self.channels().items()})
+        return out
 
     def perf_stats(self) -> dict | None:
         """Per-stage timing for the run, or None if measurement was off."""

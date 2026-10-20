@@ -14,9 +14,9 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DSTREAM="${1:-$REPO/examples/data/sample.dstream}"
-IMAGE="${IMAGE:-realtime-stem:latest}"
+IMAGE="${IMAGE:-realtime-stem:latest}"   # the Docker image (docker/Dockerfile)
 SCAN="${SCAN:-32 32}"                 # must match the capture's frame count (Ny*Nx)
-BATCH="${BATCH:-128}"
+BATCH="${BATCH:-128}"                 # frames per batch
 PULL_EP="${PULL_EP:-tcp://127.0.0.1:5555}"   # feeder PUSH  ->  run.py PULL
 PUB_EP="${PUB_EP:-tcp://127.0.0.1:5601}"     # run.py PUB   ->  viewer SUB
 NAME="realtime_stem_demo"

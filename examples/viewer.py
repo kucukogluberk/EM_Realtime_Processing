@@ -2,7 +2,8 @@
 
 The reconstruction "wipes in" during the scan because the sink publishes a throttled snapshot of
 the reconstruction-so-far (~5 Hz). This viewer keeps only the newest frame (CONFLATE), so it never
-lags behind the pipeline.
+lags behind the pipeline. Each named channel of a snapshot (for parallax: the corrected image and
+the phase-flipped one, optionally coverage) gets its own panel.
 
     python examples/viewer.py tcp://127.0.0.1:5601
     python examples/viewer.py tcp://127.0.0.1:5601 --high-pass 25   # subtract a slow background
@@ -19,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # repo root on path
 
-from examples._display import high_pass, robust_clim   # noqa: E402
+from realtime_stem.streaming.display import PanelFigure, meta_line   # noqa: E402
 
 
 def _log(msg: str) -> None:
@@ -27,26 +28,27 @@ def _log(msg: str) -> None:
 
 
 class _View:
-    """Holds the matplotlib state and renders frames."""
+    """A desktop window around the shared `PanelFigure` renderer."""
 
     def __init__(self, label: str, hp_sigma: float):
         import matplotlib.pyplot as plt
         self.plt = plt
         self.label = label
-        self.hp = hp_sigma
-        self.hp_note = f"  |  high-pass σ={hp_sigma:g}px" if hp_sigma > 0 else ""
-        self.fig, self.ax = plt.subplots(figsize=(7.5, 7.5))
+        self.fig = plt.figure(figsize=(7.5, 7.5))
         try:
             self.fig.canvas.manager.set_window_title(f"live view — {label}")
         except Exception:
             pass
-        self.im = None
-        self.cbar = None
+        self.panels = PanelFigure(self.fig, high_pass_sigma=hp_sigma, label=label)
         self.n = 0
         plt.ion()
         plt.show(block=False)
-        self.ax.set_title(f"waiting for {label} …")
+        self.fig.suptitle(f"waiting for {label} …")
         self.fig.canvas.draw()
+
+    @property
+    def axes(self):
+        return self.panels.axes
 
     def alive(self) -> bool:
         return self.plt.fignum_exists(self.fig.number)
@@ -55,24 +57,14 @@ class _View:
         self.fig.canvas.flush_events()
         self.fig.canvas.start_event_loop(seconds)
 
-    def render(self, raw) -> None:
-        disp = high_pass(raw, self.hp) if self.hp > 0 else raw
-        lo, hi = robust_clim(disp)
+    def render(self, raw, header: dict) -> None:
         self.n += 1
-        if self.im is None or disp.shape != self.im.get_array().shape:
-            self.ax.clear()
-            self.im = self.ax.imshow(disp, cmap="gray", vmin=lo, vmax=hi)
-            if self.cbar is None:
-                self.cbar = self.fig.colorbar(self.im, ax=self.ax, fraction=0.046)
-            else:
-                self.cbar.update_normal(self.im)
-        else:
-            self.im.set_data(disp)
-            self.im.set_clim(lo, hi)
-        self.ax.set_title(f"{self.label} — update #{self.n} "
-                          f"at {time.strftime('%H:%M:%S')}{self.hp_note}")
+        ranges = self.panels.update(raw, header,
+                                    title=f"update #{self.n} at {time.strftime('%H:%M:%S')}")
         self.fig.canvas.draw()
-        _log(f"update #{self.n}: shape={disp.shape} range=[{lo:.4g}, {hi:.4g}]")
+        shape = raw.shape[-2:]
+        _log(f"update #{self.n}: {len(ranges)}×{shape} "
+             f"{' '.join(f'[{lo:.3g}, {hi:.3g}]' for lo, hi in ranges)} {meta_line(header)}")
 
 
 def run(endpoint: str, label: str, hp_sigma: float) -> None:
@@ -84,7 +76,7 @@ def run(endpoint: str, label: str, hp_sigma: float) -> None:
         try:
             msg = sub.recv_latest(timeout_ms=100)
             if msg is not None:
-                view.render(msg[0])
+                view.render(*msg)
             view.pump(0.01)
         except KeyboardInterrupt:
             break
@@ -95,12 +87,19 @@ def run(endpoint: str, label: str, hp_sigma: float) -> None:
     _log("window closed — exiting")
 
 
-def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> argparse.ArgumentParser:
+    """The command-line interface (also rendered into docs/CLI.md)."""
+    p = argparse.ArgumentParser(
+        prog="python examples/viewer.py", description=__doc__)
     p.add_argument("endpoint", help="tcp://host:port of the run.py --live-endpoint PUB.")
     p.add_argument("--high-pass", type=float, default=0.0, metavar="SIGMA_PX",
                    help="Gaussian high-pass sigma in pixels (0 = off).")
     p.add_argument("--label", default=None, help="Window/title label.")
+    return p
+
+
+def main() -> None:
+    p = build_parser()
     args = p.parse_args()
     run(args.endpoint, args.label or args.endpoint, args.high_pass)
 

@@ -8,8 +8,9 @@ user's machine. Humans: start with `README.md`; the full description is `docs/GU
 A real-time STEM reconstruction pipeline. A DECTRIS ARINA detector's control unit (the DCU)
 streams compressed frames over ZeroMQ; the pipeline receives them, decompresses them on an NVIDIA
 GPU, folds them into a parallax / tcBF image while the scan runs, and publishes the image so far
-for a live viewer. It only **reads** the DCU's stream: it never configures the detector, the DCU
-or the microscope.
+(parallax and phase-flipped) for a live viewer or notebook. A pure-Python ingest runs the same
+processing on CPU or Apple `mps`, without Docker, from a stream or a recording. It only **reads**
+the DCU's stream: it never configures the detector, the DCU or the microscope.
 
 ## Where is what
 
@@ -17,18 +18,21 @@ Three stages, each changeable on its own:
 
 | Stage | Code | Language | Rebuild the image after a change? |
 |---|---|---|---|
-| ingest: receive + GPU decompress | `operators/` (`ZmqRxOp`, `DecompressGpuOp`), wired in `realtime_stem/ingest/holoscan_graph.py` | C++/CUDA (operators), Python (wiring) | operators: **yes**; wiring: no |
+| ingest: receive + decompress | `operators/` (`ZmqRxOp`, `DecompressGpuOp`), wired in `realtime_stem/ingest/holoscan_graph.py`; or `ingest/python_ingest.py` + `codec.py` (CPU); both feed `ingest/sink.py` | C++/CUDA (operators), Python | operators: **yes**; the rest: no |
 | processing: the reconstruction | `realtime_stem/processing/` (`base.py` contracts, `registry.py`, `parallax/`) | Python + PyTorch | no |
-| stream-out + viewing | `realtime_stem/streaming/live_stream.py`, `examples/viewer.py`, `examples/probe.py` | Python | no |
+| stream-out + viewing | `realtime_stem/streaming/` (`live_stream.py`, `display.py`, `notebook.py`), `examples/viewer.py`, `examples/live_view.ipynb` | Python | no |
 
 - `realtime_stem/apps/run.py`: the program that is run. It owns the transport flags (endpoint,
   batch, scheduler, connections, live preview, `--continuous`) and never names an algorithm.
 - `realtime_stem/processing/parallax/`: `config.py` (the physics flags and their units),
   `engine.py` (`preprocess_geometry`: bright-field pixels and their shifts, NumPy;
-  `ParallaxAccumulator`: the GPU scatter-add), `algorithm.py` (CLI wiring and saving results).
+  `ParallaxAccumulator`: the scatter-add, `--accumulate` modes), `readout.py` (the live channels:
+  phase flip, scan-mean removal, filters), `orientation.py` (the 8 detector layouts),
+  `algorithm.py` (CLI wiring and saving results).
 - `tools/`: the `.dstream` recording format, a stream recorder (`record_stream.py`, host Python
-  with pyzmq + cbor2; stop the pipeline while it records), a replay feeder (`replay_to_zmq.py`), a synthetic
-  recording generator, and `check_gpu_copies.py` (a hardware check).
+  with pyzmq + cbor2; stop the pipeline while it records), a replay feeder (`replay_to_zmq.py`),
+  a 4D-STEM simulator (`simulate_4dstem.py`), recording converters/generators, and
+  `check_gpu_copies.py` (a hardware check).
 - `scripts/check_install.sh`: the step-by-step machine check (GPU, image, GPU copies, replays, DCU
   reachability and link speed). `scripts/run_replay_demo.sh`: the no-detector demo.
 - `docker/Dockerfile`: builds the image (NVIDIA's pinned Holoscan base + the compiled operators).
@@ -41,11 +45,13 @@ The pipeline runs inside the Docker image; this folder is bind-mounted into the 
 `/work` (`-v "$PWD":/work`). So **a Python edit takes effect at the next `docker run`**; only a
 change under `operators/` needs `docker build` again (a few minutes). The viewer and the replay
 feeder run on the host (`pip install -e ".[viz,replay]"`). The live command is in `README.md`;
-`run.py --help` lists every flag.
+`run.py --help` and `docs/CLI.md` list every flag. Without Docker:
+`pip install -e ".[local,viz,replay]"`, then `run.py --ingest python` (see `scripts/run_local_demo.sh`).
 
 ## Checking a change
 
-1. Unit tests, inside the image (the GPU test runs there):
+1. Unit tests. Locally (no GPU needed): `pip install -e ".[local,dev,oracles]"` and
+   `python -m pytest tests`. Inside the image (the CUDA tests run there):
    `docker run --rm --gpus all -v "$PWD":/work -w /work --entrypoint bash realtime-stem:latest -c "python3 -m pip install -q pytest && python3 -m pytest -q -p no:cacheprovider tests"`
 2. The whole pipeline without a detector: `scripts/run_replay_demo.sh`, or a full-size replay of a
    recorded scan: `RECORDING=<file.dstream> SCAN="1024 1024" BINNED=1 scripts/check_install.sh`.
@@ -69,6 +75,10 @@ changing anything used live.
 - `--batch-size` is capped at 2048 at compile time (`kMaxBatchSize`,
   `operators/cpp/common/constants.h`); 2048 is the tested default.
 - `--scheduler-threads 0` (single-threaded, default) is the tested, fastest setting.
+- `--accumulate latest | all` map image id → position as `id % positions`, so they need exactly
+  one frame per scan position; `latest` also needs `--batch-size` ≤ the scan positions.
+- A change to a command-line flag needs `python scripts/gen_cli_reference.py` (a test checks
+  that `docs/CLI.md` is current).
 - The DCU's stream compression must be `bslz4`.
 - After every scan the runner prints `COMPLETE` or `WARNING: INCOMPLETE SCAN …`; that line is the
   test of a live run.
