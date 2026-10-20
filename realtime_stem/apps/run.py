@@ -13,7 +13,11 @@ Runs inside the image built by `docker/Dockerfile` (this package bind-mounted), 
       -v "$PWD":/work -v "$PWD/out":/out --entrypoint python3 \
       realtime-stem:latest -m realtime_stem.apps.run \
       --algorithm parallax --endpoint tcp://<DCU_IP>:31001 --batch-size 2048 \
-      --binned --scan 256 256 --out-dir /out
+      --binned --scan 256 256 --energy <eV> --semiangle <mrad> --angular-sampling <mrad/px> \
+      --scan-sampling <Å> --defocus <Å> --rotation <deg> --out-dir /out
+
+The acquisition values (energy, semiangle, angular and scan sampling, scan, defocus, rotation)
+have no defaults: without them the run stops and lists what is missing.
 
 `--continuous` (optionally `--rounds N`) re-arms with a fresh accumulator after each scan's `end`,
 so a whole session of scans runs against one container. See the README for the full walkthrough
@@ -27,7 +31,8 @@ Two ingests feed the same processing and stream-out (`--ingest`): the compiled H
 device incl. Apple's mps, tens of kHz) that also reads captures directly (`--source`):
 
     python -m realtime_stem.apps.run --ingest python --device mps \
-      --source capture.dstream --source-rate 5000 --binned --scan 256 256 --live-endpoint tcp://127.0.0.1:5601
+      --source capture.dstream --source-rate 5000 --binned $(cat capture.flags) \
+      --live-endpoint tcp://127.0.0.1:5601
 """
 
 from __future__ import annotations
@@ -254,6 +259,9 @@ def main() -> None:
 
     parser = build_parser(algorithm)
     args = parser.parse_args(algorithm.preprocess_argv(argv))
+    problems = algorithm.check_args(args)
+    if problems:
+        parser.error("\n".join(problems))
 
     ingest = resolve_ingest(args)
     if ingest == "holoscan":

@@ -21,6 +21,9 @@ BATCH="${BATCH:-128}"                 # frames per batch
 PULL_EP="${PULL_EP:-tcp://127.0.0.1:5555}"   # feeder PUSH  ->  run.py PULL
 PUB_EP="${PUB_EP:-tcp://127.0.0.1:5601}"     # run.py PUB   ->  viewer SUB
 NAME="realtime_stem_demo"
+# The bundled sample holds random counts, not a real scan: these acquisition values only exercise
+# the pipeline. For a recording of your own, give its real values.
+DEMO_FLAGS="${DEMO_FLAGS:---energy 300000 --semiangle 4 --angular-sampling 1.0 --scan-sampling 0.5 --defocus -15000 --rotation 0 --center 48 48}"  # acquisition values
 
 command -v docker >/dev/null || { echo "docker not found"; exit 1; }
 [ -f "$DSTREAM" ] || { echo "no capture at $DSTREAM (make one: python -m tools.make_dstream 96 96 uint16 1024 --out $DSTREAM)"; exit 1; }
@@ -37,7 +40,7 @@ echo "[demo] starting the pipeline in $IMAGE (parallax, scan $SCAN, live PUB on 
 docker run --rm --name "$NAME" --network host --gpus "device=$GPU" --ulimit stack=33554432:33554432 \
   -v "$REPO":/work -v "$REPO/out":/out -w /work --entrypoint python3 \
   "$IMAGE" -m realtime_stem.apps.run \
-    --algorithm parallax --endpoint "$PULL_EP" --binned --scan $SCAN \
+    --algorithm parallax --endpoint "$PULL_EP" --binned --scan $SCAN $DEMO_FLAGS \
     --batch-size "$BATCH" --n-connections 1 --live-endpoint "$PUB_EP" --live-every 0.2 --out-dir /out &
 
 echo "[demo] starting the viewer (SUB $PUB_EP) …"

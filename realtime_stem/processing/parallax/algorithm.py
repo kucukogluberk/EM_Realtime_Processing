@@ -18,6 +18,7 @@ from realtime_stem.processing.parallax.config import (
     add_tuning_args,
     config_from_args,
     join_negative_floats,
+    missing_acquisition_args,
     readout_from_args,
 )
 from realtime_stem.processing.parallax.engine import (
@@ -38,13 +39,17 @@ class ParallaxAlgorithm(Algorithm):
                  "the detector changes the BF disk — set --angular-sampling to match the mode.")
         g.add_argument(
             "--binned", action="store_true",
-            help="ARINA 2×2-binned preset: 96×96 detector, doubled angular sampling.")
+            help="ARINA 2×2-binned preset: 96×96 detector (give --angular-sampling of the "
+                 "binned mode).")
         add_tuning_args(g)        # --defocus/--rotation/--upsampling/physics/--scan/--center
         add_readout_args(parser)  # --no-phase-flip/--no-dc-correct/--normalize/filters
 
     def preprocess_argv(self, argv: list[str]) -> list[str]:
         # `--defocus -1.5e4` etc.: scientific-notation negatives read as flags otherwise.
         return join_negative_floats(argv)
+
+    def check_args(self, args: argparse.Namespace) -> list[str]:
+        return missing_acquisition_args(args)
 
     def build(self, args: argparse.Namespace) -> Accumulator:
         cfg = config_from_args(args)   # incl. --detector / --binned / --detector-layout
@@ -67,6 +72,15 @@ class ParallaxAlgorithm(Algorithm):
               f"angular sampling = {cfg.angular_sampling[0]:.4g} mrad/px, disk center = {center_str}"
               f"{', columns flipped' if cfg.flip_cols else ''}",
               flush=True)
+        radius = cfg.semiangle_cutoff / cfg.angular_sampling[0]
+        print(f"[parallax] BF disk radius = {radius:.3g} px (semiangle {cfg.semiangle_cutoff:g} mrad"
+              f" / {cfg.angular_sampling[0]:g} mrad/px): compare with the disk on a frame",
+              flush=True)
+        if geo.n_clipped:
+            print(f"[parallax] WARNING: {geo.n_clipped} of {geo.n_clipped + geo.n_bf} BF-disk "
+                  f"pixels fall outside the {cfg.detector_shape[0]}x{cfg.detector_shape[1]} frame "
+                  f"and are left out. Check --center, --semiangle and --angular-sampling.",
+                  flush=True)
 
         mode = getattr(args, "accumulate", "scan")
         acc = ParallaxAccumulator(geo, device=getattr(args, "device", None),

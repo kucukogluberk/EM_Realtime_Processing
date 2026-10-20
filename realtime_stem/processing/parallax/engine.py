@@ -134,6 +134,7 @@ class ParallaxGeometry:
     semiangle_cutoff: float = 0.0       # mrad (the readout band limit)
     flip_cols: bool = False
     probe_center: tuple | None = None   # (row, col) px on the raw frame; None → frame center
+    n_clipped: int = 0                  # BF-disk pixels that fall outside the frame (dropped)
 
     @property
     def n_bf(self) -> int:
@@ -214,6 +215,7 @@ def preprocess_geometry(
         cj = gpts[1] - 1 - gpts[1] // 2 if flip_cols else gpts[1] // 2
     det_i, det_j = ci + off_i, (cj - off_j if flip_cols else cj + off_j)
     ok = (det_i >= 0) & (det_i < gpts[0]) & (det_j >= 0) & (det_j < gpts[1])
+    n_clipped = int((~ok).sum())
     if not ok.all():  # disk clips the frame edge — those tilted views fall off the detector
         inds_i, inds_j, det_i, det_j = inds_i[ok], inds_j[ok], det_i[ok], det_j[ok]
     bf_flat_inds = (det_i * gpts[1] + det_j).astype(np.int32)
@@ -232,6 +234,7 @@ def preprocess_geometry(
         flip_cols=bool(flip_cols),
         probe_center=None if probe_center is None else (float(probe_center[0]),
                                                         float(probe_center[1])),
+        n_clipped=n_clipped,
     )
 
 

@@ -52,6 +52,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # repo root → `
 from realtime_stem.processing.parallax.engine import _electron_wavelength, _pick_device  # noqa: E402
 from realtime_stem.processing.parallax.orientation import (  # noqa: E402
     DETECTOR_LAYOUTS,
+    layout_center,
     layout_frames,
     layout_shape,
 )
@@ -245,6 +246,8 @@ def reconstruct_flags(p: SimParams, g: SimGrid) -> list[str]:
              "--angular-sampling", f"{p.angular_sampling:g}",
              "--scan-sampling", f"{g.scan_step:.6g}",
              f"--defocus={p.aberrations.get('C10', 0.0):g}", f"--rotation={p.rotation_deg:g}"]
+    center = layout_center(raw, p.detector_layout)            # the disk centre on the raw frames
+    flags += ["--center", f"{center[0]:g}", f"{center[1]:g}"]
     if p.aberrations.get("C12"):
         flags += [f"--c12={p.aberrations['C12']:g}",
                   f"--phi12={math.degrees(p.aberrations.get('phi12', 0.0)):g}"]

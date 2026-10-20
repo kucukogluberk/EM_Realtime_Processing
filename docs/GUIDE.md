@@ -162,7 +162,8 @@ docker run --rm --network host --gpus "device=<N>" --ulimit stack=33554432:33554
     --algorithm parallax \
     --endpoint tcp://<DCU_IP>:31001 \
     --binned --scan 256 256 --batch-size 2048 --n-connections 3 \
-    --defocus <Å> --rotation <degrees> --upsampling 2 \
+    --energy <eV> --semiangle <mrad> --angular-sampling <mrad/px> --scan-sampling <Å> \
+    --defocus <Å> --rotation <degrees> --center <row> <col> --upsampling 2 \
     --live-endpoint tcp://127.0.0.1:5601 --continuous
 ```
 
@@ -180,6 +181,16 @@ scanning"). Results
 all flags; the
 parallax tuning knobs (`--defocus`, `--rotation`, `--energy`, `--semiangle`, `--angular-sampling`,
 `--scan-sampling`, `--center`, …) use the same units live as offline.
+
+None of the acquisition values comes from the stream, and they have no defaults: `--energy` (eV,
+300 kV = 300000), `--semiangle` (mrad), `--angular-sampling` (mrad/px of the mode running, e.g.
+2 × semiangle ÷ the bright-field disk's diameter in pixels), `--scan-sampling` (Å per step),
+`--scan`, `--defocus`, `--rotation` and `--center` (the disk centre in pixels on a raw frame). A
+run without one of them stops before it starts and lists the missing ones; a default that is silently wrong would give a plausible but wrong image.
+Keep a session's values in a file and pass them as `$(cat site.flags)`. The disk's radius in
+pixels is not an input: it follows from `--semiangle` ÷ `--angular-sampling`, and the run prints it
+at start-up to compare with the disk on a frame. If part of the disk falls outside the frame
+(wrong centre or sampling), the run warns and says how many pixels it leaves out.
 
 Three parameters decide whether the image is sharp, and none of them comes from the stream:
 `--defocus` (C10 in Å, the microscope's readout is the starting point), `--rotation` (the
@@ -328,7 +339,8 @@ That needs `--accumulate latest`:
 
 ```bash
 python -m realtime_stem.apps.run --accumulate latest --scan 256 256 --binned \
-    --defocus=<Å> --rotation <degrees> --lowpass 0.1 --live-every-rows 32 \
+    --energy <eV> --semiangle <mrad> --angular-sampling <mrad/px> --scan-sampling <Å> \
+    --defocus=<Å> --rotation <degrees> --center <row> <col> --lowpass 0.1 --live-every-rows 32 \
     --endpoint tcp://<DCU_IP>:31001 --n-connections 3 --live-endpoint tcp://0.0.0.0:5601
 ```
 

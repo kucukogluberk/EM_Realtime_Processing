@@ -73,7 +73,8 @@ docker run --rm --network host --gpus "device=<N>" --ulimit stack=33554432:33554
   -v "$PWD":/work -v "$PWD/out":/out -w /work --entrypoint python3 \
   realtime-stem:latest -m realtime_stem.apps.run \
     --endpoint tcp://<DCU_IP>:31001 --binned --scan 256 256 \
-    --defocus <Å> --rotation <degrees> \
+    --energy <eV> --semiangle <mrad> --angular-sampling <mrad/px> --scan-sampling <Å> \
+    --defocus <Å> --rotation <degrees> --center <row> <col> \
     --live-endpoint tcp://127.0.0.1:5601 --continuous --out-dir /out
 ```
 
@@ -88,6 +89,10 @@ Then arm the detector, scan, and disarm, with your usual software or with
 
 - At start-up it prints the GPU it uses, and `WARNING: cannot reach …` when the DCU address is
   wrong. No frames can arrive until that is fixed.
+- The acquisition values (`--energy` in eV, `--semiangle`, `--angular-sampling`,
+  `--scan-sampling`, `--scan`, `--defocus`, `--rotation`, `--center`) have no defaults: a run
+  without one stops and lists what is missing. The bright-field disk's radius is not an input; the
+  run prints it (semiangle ÷ angular sampling) to compare with a frame. Keep them in a file and pass `$(cat site.flags)`.
 - `--scan` must match the scan.
 - `--defocus`, `--rotation` and `--center` set the sharpness; tune them on a recorded scan
   (`tools/record_stream.py`, see the guide).

@@ -62,6 +62,12 @@ them from examples, older notes or another machine:
 2. **Which GPU** to use, as `nvidia-smi` numbers them. Show the user the `nvidia-smi` list
    (name, memory in use) and let them choose, also when there is only one.
 3. **The image tag** they built (`docker images realtime-stem`).
+4. **The acquisition values**, which have no defaults: `--energy` (eV), `--semiangle` (mrad),
+   `--angular-sampling` (mrad/px of the mode running), `--scan-sampling` (Å), `--scan`,
+   `--defocus` (Å), `--rotation` (degrees), `--center` (disk centre, px on a raw frame). Ask for
+   each; never fill one in with a typical value. The disk radius is not an input (semiangle ÷
+   angular sampling; the run prints it).
+   Keep them in a file (`site.flags`) and pass `$(cat site.flags)`.
 
 Then run `GPU=<N> DCU=<DCU_IP> IMAGE=<tag> scripts/check_install.sh`. It checks the DCU first;
 every later command uses the values it prints at the end (`--gpus "device=N"`,
@@ -104,7 +110,8 @@ python -m tools.detector_setup scan   --ip <DCU_IP> --scan 256 256 --binned   # 
    `python -m pytest tests`. Inside the image (the CUDA tests run there):
    `docker run --rm --gpus all -v "$PWD":/work -w /work --entrypoint bash realtime-stem:latest -c "python3 -m pip install -q pytest && python3 -m pytest -q -p no:cacheprovider tests"`
 2. The whole pipeline without a detector: `scripts/run_replay_demo.sh`, or a full-size replay of a
-   recorded scan: `RECORDING=<file.dstream> SCAN="1024 1024" BINNED=1 scripts/check_install.sh`.
+   recorded scan: `RECORDING=<file.dstream> SCAN="1024 1024" BINNED=1 FLAGS="$(cat site.flags)"
+   scripts/check_install.sh` (FLAGS: the recording's acquisition values).
    Expect `[sink] COMPLETE: all N scan positions received`.
 3. A change to the reconstruction: replay the same recording before and after, and compare the
    saved `out/parallax_recon.npy` files.
@@ -117,6 +124,9 @@ changing anything used live.
 - **One reader per DCU stream.** The DCU deals frames round-robin to every connected reader; a
   second reader (another tool, a forgotten container) silently takes a share. Stop it first.
 - **Start the pipeline before the scan.** The DCU drops frames while no reader is connected.
+- The acquisition values (`--energy`, `--semiangle`, `--angular-sampling`, `--scan-sampling`,
+  `--scan`, `--defocus`, `--rotation`, `--center`) are required: `Algorithm.check_args` stops the run and
+  lists the missing ones. Do not add defaults for them.
 - `--scan NY NX` must equal the scan; frames are placed by their `image_id` (raster index), so
   arrival order does not matter but extra frames (e.g. flyback) do.
 - The frame size and type must match the detector mode: `--binned` (96×96) or `--detector`, and

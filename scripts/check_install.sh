@@ -4,7 +4,8 @@
 # check only opens a connection). Run from the repository root:
 #
 #   GPU=0 DCU=<DCU_IP> scripts/check_install.sh                           # the basic checks
-#   GPU=0 RECORDING=/data/scan.dstream SCAN="1024 1024" BINNED=1 scripts/check_install.sh
+#   GPU=0 RECORDING=/data/scan.dstream SCAN="1024 1024" BINNED=1 FLAGS="$(cat site.flags)" \
+#     scripts/check_install.sh
 #
 # Environment:
 #   DCU        the DCU's stream address: an IP (port 31001), or tcp://IP:PORT. Checked first, so a
@@ -12,7 +13,10 @@
 #   GPU        which GPU the pipeline uses, as numbered by nvidia-smi. Required when the machine
 #              has more than one GPU.
 #   IMAGE      the Docker image (default realtime-stem:latest)
-#   RECORDING + SCAN (+ BINNED=1 for 96x96 frames): a full-size replay
+#   RECORDING + SCAN (+ BINNED=1 for 96x96 frames) + FLAGS (the recording's acquisition values:
+#              --energy --semiangle --angular-sampling --scan-sampling --defocus --rotation
+#              --center; the
+#              rate depends on them): a full-size replay
 #   TIMEOUT    seconds a replay may take before it is stopped (default 300)
 # Every step prints PASS / FAIL / SKIP.
 set -uo pipefail
@@ -189,15 +193,22 @@ replay() {   # replay DSTREAM through the pipeline: replay LABEL DSTREAM SCAN EX
 }
 
 echo "== 5. Replay of the bundled sample through the full pipeline"
-replay sample "$REPO/examples/data/sample.dstream" "32 32" --binned --batch-size 128
+# The sample holds random counts, not a real scan: these values only exercise the pipeline.
+replay sample "$REPO/examples/data/sample.dstream" "32 32" --binned --batch-size 128 \
+  --energy 300000 --semiangle 4 --angular-sampling 1.0 --scan-sampling 0.5 --defocus -15000 \
+  --rotation 0 --center 48 48
 
 echo "== 6. Full-size replay of a real recording"
-if [ -n "${RECORDING:-}" ] && [ -n "${SCAN:-}" ]; then
+if [ -n "${RECORDING:-}" ] && [ -n "${SCAN:-}" ] && [ -z "${FLAGS:-}" ]; then
+  fail "set FLAGS to the recording's acquisition values (e.g. FLAGS=\"\$(cat site.flags)\"): the rate depends on them"
+elif [ -n "${RECORDING:-}" ] && [ -n "${SCAN:-}" ]; then
   ARGS=(); [ "${BINNED:-0}" = 1 ] && ARGS+=(--binned)
+  # shellcheck disable=SC2206
+  ARGS+=($FLAGS)
   replay recording "$RECORDING" "$SCAN" "${ARGS[@]}"
   echo "      (the rate above should be well over the detector's frame rate, e.g. > 120 kHz)"
 else
-  skip "set RECORDING=<file.dstream> and SCAN=\"Ny Nx\" (and BINNED=1 for 96x96 frames)"
+  skip "set RECORDING=<file.dstream>, SCAN=\"Ny Nx\" and FLAGS=\"<acquisition values>\" (and BINNED=1 for 96x96 frames)"
 fi
 
 echo

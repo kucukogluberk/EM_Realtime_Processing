@@ -53,6 +53,33 @@ def test_endpoint_warning_flags_an_unreachable_endpoint():
     assert run_mod.endpoint_warning("tcp://10.0.0.1") is None            # no port
 
 
+ACQUISITION = ["--energy", "300000", "--semiangle", "20", "--angular-sampling", "1.1",
+               "--scan-sampling", "1.0", "--scan", "64", "64", "--defocus", "-1.5e4",
+               "--rotation", "-15", "--center", "48", "48"]
+
+
+def test_missing_acquisition_values_stop_the_run(monkeypatch, capsys):
+    """No silent defaults for the values that differ per microscope: the run stops before
+    anything starts and names every missing flag."""
+    import pytest
+    with pytest.raises(SystemExit) as exc:
+        monkeypatch.setattr(sys, "argv", ["run.py", "--binned", "--scan", "64", "64",
+                                          "--defocus", "-10000"])
+        run_mod.main()
+    assert exc.value.code == 2
+    err = capsys.readouterr().err.split("error:", 1)[1]           # the message, not the usage
+    for flag in ("--energy", "--semiangle", "--angular-sampling", "--scan-sampling", "--rotation",
+                 "--center"):
+        assert flag in err
+    assert "--defocus " not in err and "--scan " not in err        # given: not reported
+
+
+def test_all_acquisition_values_given_is_accepted():
+    algo = registry.get("parallax")
+    args = run_mod.build_parser(algo).parse_args(algo.preprocess_argv(["--binned", *ACQUISITION]))
+    assert algo.check_args(args) == []
+
+
 def test_watch_endpoint_repeats_the_warning_until_reachable(monkeypatch, capsys):
     """A wrong DCU address must not look like a quiet wait for the scan: the warning repeats
     until the endpoint answers, then the watcher says so once and stops."""

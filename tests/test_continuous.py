@@ -234,7 +234,7 @@ def test_runner_zmq_series_per_pass_keeps_one_image(tmp_path):
            "--live-every-rows", "3", "--out-dir", str(tmp_path),
            "--detector", "32", "32", "--scan", *map(str, _SCAN), "--energy", "300e3",
            "--semiangle", "4", "--angular-sampling", "0.307617", "--scan-sampling", f"{256 / 12}",
-           "--defocus=-1.5e4", "--rotation=-15"]
+           "--defocus=-1.5e4", "--rotation=-15", "--center", "16", "16"]
     proc = subprocess.Popen(cmd, cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True)
     headers = []

@@ -97,20 +97,20 @@ usage: python -m realtime_stem.apps.run [-h] [--algorithm {parallax}]
 | parameter | default | description |
 |---|---|---|
 | `--detector HY HX` |  | Detector geometry (default: config, 192x192; --binned preset: 96x96). Changing the detector changes the BF disk — set --angular-sampling to match the mode. |
-| `--binned` | flag | ARINA 2×2-binned preset: 96×96 detector, doubled angular sampling. |
-| `--defocus C10_ANG` |  | Target defocus C10 (Å) the parallax shifts are built for (negative = underfocus). Config default: -15000. |
-| `--rotation DEG` |  | Scan/detector rotation (degrees). Config default: 0. |
+| `--binned` | flag | ARINA 2×2-binned preset: 96×96 detector (give --angular-sampling of the binned mode). |
+| `--defocus C10_ANG` |  | Target defocus C10 (Å) the parallax shifts are built for (negative = underfocus). Required. |
+| `--rotation DEG` |  | Scan/detector rotation (degrees). Required. |
 | `--c12 C12_ANG` |  | Target astigmatism magnitude C12 (Å). Config default: 0. |
 | `--phi12 DEG` |  | Target astigmatism angle phi12 (degrees). Config default: 0. |
 | `--upsampling U` |  | Output-grid upsampling (finer grid → finer shifts). Config default: 1. |
-| `--energy EV` |  | Beam energy (eV). Config default: 300000. |
-| `--semiangle MRAD` |  | Probe convergence semiangle, the bright-field cutoff (mrad). Config default: 4. |
-| `--angular-sampling MRAD_PX` |  | Detector angular sampling (mrad/px, isotropic) of the mode actually running (wins over --binned doubling). Config default: 0.5 (×2 with --binned). |
-| `--scan-sampling ANG_PX` |  | Scan step (Å, isotropic). Config default: 0.5. |
-| `--center ROW COL` |  | BF-disk center on the raw detector frames (px), py4DSTEM's Center_X Center_Y from get_probe_size. Default: the frame center (mapped through --detector-layout). |
-| `--scan NY NX` |  | Scan grid; must match what the microscope drives. Config default: 1024 1024. |
+| `--energy EV` |  | Beam energy (eV; 300 kV = 300000). Required. |
+| `--semiangle MRAD` |  | Probe convergence semiangle, the bright-field cutoff (mrad). Required. |
+| `--angular-sampling MRAD_PX` |  | Detector angular sampling (mrad/px, isotropic) of the mode actually running (binned or not). Required. |
+| `--scan-sampling ANG_PX` |  | Scan step (Å, isotropic). Required. |
+| `--center ROW COL` |  | BF-disk center on the raw detector frames (px), py4DSTEM's Center_X Center_Y from get_probe_size. Required. (The disk's radius is not an input: it is --semiangle / --angular-sampling.) |
+| `--scan NY NX` |  | Scan grid; must match what the microscope drives. Required. |
 | `--flip-cols` | flag | The detector's columns are reversed relative to the canonical layout (LiberTEM's detector_flip_cols). With --rotation this covers every transpose/flip: e.g. a transposed detector is --rotation +90 --flip-cols. Give --center as measured on the raw frames. Table in docs/GUIDE.md. |
-| `--detector-layout LAYOUT` |  | What the raw frame's (axis 0, axis 1) hold relative to the canonical (rows, cols) layout: rows,cols \| rows,-cols \| -rows,cols \| -rows,-cols \| cols,rows \| cols,-rows \| -cols,rows \| -cols,-rows. E.g. 'cols,-rows' = transposed with the second axis reversed. Adds the matching rotation and column flip to --rotation, and maps the default disk center onto the raw frame. Exclusive with --flip-cols. |
+| `--detector-layout LAYOUT` |  | What the raw frame's (axis 0, axis 1) hold relative to the canonical (rows, cols) layout: rows,cols \| rows,-cols \| -rows,cols \| -rows,-cols \| cols,rows \| cols,-rows \| -cols,rows \| -cols,-rows. E.g. 'cols,-rows' = transposed with the second axis reversed. Adds the matching rotation and column flip to --rotation; give --center as measured on the raw frames. Exclusive with --flip-cols. |
 
 **parallax readout (live channels and saved images)**
 
@@ -418,6 +418,7 @@ Configured by environment variables (shown with their defaults) and one optional
 | `BATCH` | `128` | frames per batch |
 | `PULL_EP` | `tcp://127.0.0.1:5555` | feeder PUSH -> run.py PULL |
 | `PUB_EP` | `tcp://127.0.0.1:5601` | run.py PUB -> viewer SUB |
+| `DEMO_FLAGS` | `--energy 300000 --semiangle 4 --angular-sampling 1.0 --scan-sampling 0.5 --defocus -15000 --rotation 0 --center 48 48` | acquisition values |
 
 ## Notebook: `realtime_stem.streaming.notebook.LiveView`
 

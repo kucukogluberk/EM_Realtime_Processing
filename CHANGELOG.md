@@ -92,6 +92,14 @@ Contributed by Georgios Varnavides.
   leftover container holds the replay port, and the feeder's log is kept. The check ends with the
   `--gpus` and `--endpoint` values for the run command.
 - The run commands in the docs use `--gpus "device=N"` instead of `--gpus all`.
+- The acquisition values have no defaults any more: `--energy`, `--semiangle`,
+  `--angular-sampling`, `--scan-sampling`, `--scan`, `--defocus`, `--rotation` and `--center` are
+  required,
+  and a run without one of them stops before it starts, listing what is missing (a silently used
+  default gave a plausible but wrong image). `scripts/check_install.sh` takes the recording's
+  values in `FLAGS`. The simulator's `.flags` include `--center`.
+- The start-up summary prints the bright-field disk's radius (semiangle ÷ angular sampling) and
+  warns when part of the disk falls outside the frame (those pixels were dropped silently).
 - `tools/detector_setup.py`: `check` (read only) and `apply` the DCU settings the pipeline needs,
   `arm`, `disarm`, and `scan` (arm, a site's own `start_scan()`, disarm). The scan generator is
   left to each site.
