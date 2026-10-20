@@ -9,7 +9,7 @@ change here — see `realtime_stem/processing/registry.py`.
 
 Runs inside the image built by `docker/Dockerfile` (this package bind-mounted), e.g.:
 
-    docker run --rm --network host --gpus all --ulimit stack=33554432:33554432 \
+    docker run --rm --network host --gpus "device=0" --ulimit stack=33554432:33554432 \
       -v "$PWD":/work -v "$PWD/out":/out --entrypoint python3 \
       realtime-stem:latest -m realtime_stem.apps.run \
       --algorithm parallax --endpoint tcp://<DCU_IP>:31001 --batch-size 2048 \
@@ -37,6 +37,8 @@ import importlib.util
 import signal
 import socket
 import sys
+import threading
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -70,9 +72,60 @@ def endpoint_warning(endpoint: str, timeout: float = 2.0) -> str | None:
         with socket.create_connection((parts.hostname, parts.port), timeout=timeout):
             return None
     except OSError as exc:
-        return (f"[run] WARNING: cannot reach {parts.hostname}:{parts.port} ({exc}). Check the "
-                f"DCU address and port, that its stream interface is enabled, and the network / "
-                f"firewall. The pipeline keeps waiting and connects once it is reachable.")
+        return (f"[run] WARNING: cannot reach {parts.hostname}:{parts.port} ({exc}). No frames "
+                f"can arrive until this is fixed: check the DCU address and port, that its "
+                f"stream interface is enabled, and the network / firewall "
+                f"(`DCU={parts.hostname} scripts/check_install.sh`). The pipeline keeps trying; "
+                f"Ctrl-C stops it.")
+
+
+def watch_endpoint(endpoint: str, every: float = 30.0) -> threading.Thread | None:
+    """Warn now when the endpoint is unreachable (`endpoint_warning`) and keep checking in the
+    background: the warning repeats every `every` seconds until the endpoint answers, so a wrong
+    address cannot pass for a quiet wait for the scan. Returns the watching thread, or None when
+    there is nothing to watch."""
+    warning = endpoint_warning(endpoint)
+    if warning is None:
+        return None
+    print(warning, flush=True)
+    where = urlsplit(endpoint).netloc
+
+    def watch() -> None:
+        t0 = time.monotonic()
+        while True:
+            time.sleep(every)
+            if endpoint_warning(endpoint) is None:
+                print(f"[run] {where} is reachable now.", flush=True)
+                return
+            print(f"[run] WARNING: still cannot reach {where} after {time.monotonic() - t0:.0f} s; "
+                  f"no frames can arrive. Check the DCU address (Ctrl-C stops the pipeline).",
+                  flush=True)
+
+    thread = threading.Thread(target=watch, name="endpoint-watch", daemon=True)
+    thread.start()
+    return thread
+
+
+def gpu_report() -> list[str]:
+    """Which GPU the run uses (name, memory, PCI bus as in nvidia-smi's Bus-Id), plus warnings
+    when several GPUs are visible or when other programs already hold much of its memory."""
+    import torch
+    if not torch.cuda.is_available():
+        return []
+    p = torch.cuda.get_device_properties(0)
+    bus = getattr(p, "pci_bus_id", None)
+    lines = [f"[run] GPU: {p.name}, {p.total_memory / 2**30:.0f} GiB"
+             + (f", PCI bus {bus:02X}" if isinstance(bus, int) else "")]
+    n = torch.cuda.device_count()
+    if n > 1:
+        lines.append(f"[run] WARNING: {n} GPUs are visible; this run uses the first in CUDA's "
+                     f"order, which can differ from nvidia-smi's numbering. Choose one with "
+                     f"docker run --gpus \"device=N\" (N as nvidia-smi numbers them).")
+    free, total = torch.cuda.mem_get_info(0)
+    if total - free > 2 * 2**30:
+        lines.append(f"[run] note: {(total - free) / 2**30:.0f} of {total / 2**30:.0f} GiB of this "
+                     f"GPU are already in use (nvidia-smi shows by what). Is this the right GPU?")
+    return lines
 
 
 def check_batch_for_accumulate(args, acc) -> None:
@@ -219,10 +272,11 @@ def main() -> None:
     else:
         from realtime_stem.ingest.python_ingest import PythonIngest, ZmqStream
         print(f"[run] realtime-stem {__version__}, Python ingest", flush=True)
+    if args.device in ("auto", "cuda"):
+        for line in gpu_report():
+            print(line, flush=True)
     if args.source is None:
-        warning = endpoint_warning(args.endpoint)
-        if warning:
-            print(warning, flush=True)
+        watch_endpoint(args.endpoint)
 
     publisher = None
     if args.live_endpoint:

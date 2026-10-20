@@ -33,8 +33,8 @@ Three stages, each changeable on its own:
   with pyzmq + cbor2; stop the pipeline while it records), a replay feeder (`replay_to_zmq.py`),
   a 4D-STEM simulator (`simulate_4dstem.py`), recording converters/generators, and
   `check_gpu_copies.py` (a hardware check).
-- `scripts/check_install.sh`: the step-by-step machine check (GPU, image, GPU copies, replays, DCU
-  reachability and link speed). `scripts/run_replay_demo.sh`: the no-detector demo.
+- `scripts/check_install.sh`: the step-by-step machine check (DCU reachability and link speed,
+  GPU, image, GPU copies, replays). `scripts/run_replay_demo.sh`: the no-detector demo.
 - `docker/Dockerfile`: builds the image (NVIDIA's pinned Holoscan base + the compiled operators).
 - `tests/`: unit tests (parallax math against a float64 reference, the stream transport, the
   runner's CLI, the C frame parser).
@@ -47,6 +47,28 @@ change under `operators/` needs `docker build` again (a few minutes). The viewer
 feeder run on the host (`pip install -e ".[viz,replay]"`). The live command is in `README.md`;
 `run.py --help` and `docs/CLI.md` list every flag. Without Docker:
 `pip install -e ".[local,viz,replay]"`, then `run.py --ingest python` (see `scripts/run_local_demo.sh`).
+
+## Setting up on a new machine
+
+Ask the user before running anything that waits for frames. Do not guess these, and do not take
+them from examples, older notes or another machine:
+
+1. **The DCU's stream address** (IP, and the port if not 31001). It is the address of the DCU's
+   data interface on the network to this machine, which can differ from the one used for the
+   DCU's web page.
+2. **Which GPU** to use, as `nvidia-smi` numbers them. Show the user the `nvidia-smi` list
+   (name, memory in use) and let them choose, also when there is only one.
+3. **The image tag** they built (`docker images realtime-stem`).
+
+Then run `GPU=<N> DCU=<DCU_IP> IMAGE=<tag> scripts/check_install.sh`. It checks the DCU first;
+every later command uses the values it prints at the end (`--gpus "device=N"`,
+`--endpoint tcp://<DCU_IP>:31001`). The pipeline prints the GPU it uses (`[run] GPU: …`);
+compare it with the user's choice.
+
+Do not wait on a silent command. If the pipeline or the recorder prints `cannot reach`, or
+nothing arrives within a minute of the user starting a scan, stop and check the address, the
+port, the GPU and `docker ps` (a leftover container) with the user. The scan itself, arming the
+detector and any DCU setting are the user's: ask them to do it, and never do it from here.
 
 ## Checking a change
 
@@ -85,7 +107,9 @@ changing anything used live.
 
 ## Adapting to a machine
 
-- Which GPU: `--gpus "device=N"` (the pipeline uses one GPU). GPU type missing from the build
+- Which GPU: `--gpus "device=N"` (the pipeline uses one GPU). With `--gpus all` on a machine
+  with several GPUs the pipeline takes the first in CUDA's order, which can differ from
+  nvidia-smi's numbering. GPU type missing from the build
   ("no kernel image is available"): `docker build --build-arg CUDA_ARCHITECTURES="…"`.
 - Rate below the detector's on a shared or two-socket server: `docker run --cpuset-cpus …` on the
   socket next to the GPU (`nvidia-smi topo -m`).

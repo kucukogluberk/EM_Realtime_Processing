@@ -129,10 +129,15 @@ bitshuffle and dectris-compression, in a host environment; the image does not ca
 
 ## Live usage (against a detector)
 
+Two values come from the site, not from this repository: the DCU's stream address (the IP of its
+data interface on the network to this machine; it can differ from the address of the DCU's web
+page) and the GPU (its number in `nvidia-smi -L`). Check both first:
+`GPU=<N> DCU=<DCU_IP> scripts/check_install.sh`.
+
 Run the pipeline inside the container, pointing it at the DCU's ZMQ stream:
 
 ```bash
-docker run --rm --network host --gpus all --ulimit stack=33554432:33554432 \
+docker run --rm --network host --gpus "device=<N>" --ulimit stack=33554432:33554432 \
   -v "$PWD":/work -v "$PWD/out":/out -w /work --entrypoint python3 \
   realtime-stem:latest -m realtime_stem.apps.run \
     --algorithm parallax \
@@ -173,7 +178,8 @@ python3 tools/record_stream.py capture --ip <DCU_IP> --out scan01.dstream
 ```
 
 and start the scan. The recorder (host Python with `pyzmq` and `cbor2`) stops by itself at the
-end of the scan and reports whether every frame arrived (`COMPLETE`). Replay it into the pipeline
+end of the scan and reports whether every frame arrived (`COMPLETE`). It warns when nothing
+accepts connections at the address (`WARNING: cannot reach …`). Replay it into the pipeline
 with `tools/replay_to_zmq.py`; keep the microscope settings of each recording next to it.
 
 ## Running without the container
@@ -451,6 +457,17 @@ issues). For the end-to-end rate on a given machine, replay a recording with
 `scripts/check_install.sh`.
 
 ## Known issues and limitations
+
+- **A wrong DCU address looks like waiting for the scan.** ZeroMQ connects lazily and retries
+  forever, so the pipeline and the recorder cannot fail on a wrong address. Both print
+  `WARNING: cannot reach <ip>:<port>` at start-up and every 30 s until it answers.
+  `DCU=<DCU_IP> scripts/check_install.sh` tells a wrong address (no answer to ping) from a
+  closed stream port.
+- **Which GPU.** `--gpus "device=N"` gives the container exactly that GPU, numbered as in
+  `nvidia-smi`. With `--gpus all` on a machine with several GPUs the pipeline takes the first in
+  CUDA's order, which can differ from nvidia-smi's; it then prints a warning. At start-up the run
+  prints the GPU it uses (`[run] GPU: <name>, PCI bus <bus>`, the bus as in nvidia-smi's Bus-Id),
+  and a note when other programs already hold much of its memory.
 
 - **The run reports whether the scan is complete.** After every scan: `[sink] COMPLETE: all N
   scan positions received`, or `WARNING: INCOMPLETE SCAN: … (k missing, d frames for positions

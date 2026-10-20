@@ -32,26 +32,34 @@ tests/                unit tests
 
 ## Requirements
 
-- Linux with an NVIDIA GPU, Docker and the NVIDIA container toolkit (`docker run --gpus all`
+- Linux with an NVIDIA GPU, Docker and the NVIDIA container toolkit (`docker run --gpus`
   must work)
 - Python 3.10+ on the host, for the viewer
 
 ## Install
 
+Have two things at hand first:
+
+- **The DCU's stream address**: the IP of the DCU's data interface on the network to this
+  machine (it can differ from the address of the DCU's web page). Port 31001 by default.
+- **Which GPU** to use: its number in `nvidia-smi -L`.
+
 ```bash
 docker build -t realtime-stem:latest -f docker/Dockerfile .
 pip install -e ".[viz,replay]"
-scripts/check_install.sh
+GPU=<N> DCU=<DCU_IP> scripts/check_install.sh
 ```
 
-The image holds the compiled code; the Python package is mounted from this folder at run time.
+The check tests the DCU address first and ends with the `--gpus` and `--endpoint` values for the
+run command. The image holds the compiled code; the Python package is mounted from this folder at
+run time.
 
 ## Run
 
 Start the pipeline before the scan:
 
 ```bash
-docker run --rm --network host --gpus all --ulimit stack=33554432:33554432 \
+docker run --rm --network host --gpus "device=<N>" --ulimit stack=33554432:33554432 \
   -v "$PWD":/work -v "$PWD/out":/out -w /work --entrypoint python3 \
   realtime-stem:latest -m realtime_stem.apps.run \
     --endpoint tcp://<DCU_IP>:31001 --binned --scan 256 256 \
@@ -65,6 +73,8 @@ Watch it in a second terminal:
 python examples/viewer.py tcp://127.0.0.1:5601
 ```
 
+- At start-up it prints the GPU it uses, and `WARNING: cannot reach …` when the DCU address is
+  wrong. No frames can arrive until that is fixed.
 - `--scan` must match the scan.
 - `--defocus`, `--rotation` and `--center` set the sharpness; tune them on a recorded scan
   (`tools/record_stream.py`, see the guide).

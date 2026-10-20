@@ -382,6 +382,7 @@ Configured by environment variables (shown with their defaults) and one optional
 | variable | default | meaning |
 |---|---|---|
 | `IMAGE` | `realtime-stem:latest` | the Docker image (docker/Dockerfile) |
+| `GPU` | `0` | which GPU, as nvidia-smi numbers them |
 | `SCAN` | `32 32` | must match the capture's frame count (Ny*Nx) |
 | `BATCH` | `128` | frames per batch |
 | `PULL_EP` | `tcp://127.0.0.1:5555` | feeder PUSH -> run.py PULL |

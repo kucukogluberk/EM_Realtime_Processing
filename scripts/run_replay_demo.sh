@@ -9,12 +9,13 @@
 # -f docker/Dockerfile .) and, for the viewer window, a display.
 #
 # Usage:   scripts/run_replay_demo.sh [DSTREAM]
-#   IMAGE=realtime-stem:latest  SCAN="64 64"  BATCH=256  scripts/run_replay_demo.sh
+#   IMAGE=realtime-stem:latest  GPU=0  SCAN="64 64"  BATCH=256  scripts/run_replay_demo.sh
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DSTREAM="${1:-$REPO/examples/data/sample.dstream}"
 IMAGE="${IMAGE:-realtime-stem:latest}"   # the Docker image (docker/Dockerfile)
+GPU="${GPU:-0}"                       # which GPU, as nvidia-smi numbers them
 SCAN="${SCAN:-32 32}"                 # must match the capture's frame count (Ny*Nx)
 BATCH="${BATCH:-128}"                 # frames per batch
 PULL_EP="${PULL_EP:-tcp://127.0.0.1:5555}"   # feeder PUSH  ->  run.py PULL
@@ -33,7 +34,7 @@ mkdir -p "$REPO/out"
 
 # --n-connections 1: one connection is plenty for the small demo (the DCU needs 3 for 120 kHz).
 echo "[demo] starting the pipeline in $IMAGE (parallax, scan $SCAN, live PUB on $PUB_EP) …"
-docker run --rm --name "$NAME" --network host --gpus all --ulimit stack=33554432:33554432 \
+docker run --rm --name "$NAME" --network host --gpus "device=$GPU" --ulimit stack=33554432:33554432 \
   -v "$REPO":/work -v "$REPO/out":/out -w /work --entrypoint python3 \
   "$IMAGE" -m realtime_stem.apps.run \
     --algorithm parallax --endpoint "$PULL_EP" --binned --scan $SCAN \

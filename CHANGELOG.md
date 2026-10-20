@@ -79,6 +79,20 @@ For the full rate on a given GPU, replay a recording with `scripts/check_install
 
 Contributed by Georgios Varnavides.
 
+**Setup checks.**
+
+- The DCU address is checked first: the pipeline and `tools/record_stream.py` warn at start-up,
+  and every 30 s, while nothing accepts connections at the stream address, instead of waiting
+  silently.
+- The run prints the GPU it uses (name, PCI bus), warns when several GPUs are visible, and notes
+  when the GPU is already busy.
+- `scripts/check_install.sh`: the DCU check comes first (`DCU=<ip>` is enough) and tells a wrong
+  address from a closed port. `GPU=` is required on machines with several GPUs and is compared
+  with the GPU the container sees. A replay no longer hangs when the pipeline stops early or a
+  leftover container holds the replay port, and the feeder's log is kept. The check ends with the
+  `--gpus` and `--endpoint` values for the run command.
+- The run commands in the docs use `--gpus "device=N"` instead of `--gpus all`.
+
 ## 2.0.2
 
 - The default scheduler is Holoscan's single-threaded one (`--scheduler-threads 0`). The
