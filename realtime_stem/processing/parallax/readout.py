@@ -1,8 +1,8 @@
 """Readout-time processing of the parallax accumulator: everything that is linear and
 shift-invariant over the scan, so it can be applied to the accumulated image instead of per frame.
 
-The hot path (`ParallaxAccumulator._accumulate_into`) only deposits shifted, frame-mean-subtracted
-bright-field values. Every live snapshot then derives, from that one buffer plus two small side
+The hot path (`ParallaxAccumulator._accumulate_into`) only deposits shifted bright-field values
+(minus each frame's mean with `subtract_frame_mean`). Every live snapshot then derives, from that one buffer plus two small side
 accumulators (the visited-position mask and the per-BF-pixel running sum):
 
 - **phase flip**: `sign(sin χ(q))` on the scan-space frequencies. The streamed reference
@@ -13,11 +13,12 @@ accumulators (the visited-position mask and the per-BF-pixel running sum):
   limit (`2α/λ`), following quantem's `DirectPtychographyMontage._apply_fourier_filters`.
 - **per-BF scan-mean removal**: subtracting each bright-field pixel's scan mean from every deposit
   (quantem's `_preprocess`) is a convolution of the comb of position visits with the per-pixel means
-  placed at their shifts, so it is applied once here rather than per frame. With the per-frame mean
-  the hot path already removes, this is the double-centering quantem does (the two commute). It
-  only changes a fully-scanned, unupsampled wrap (where every output pixel receives each BF pixel
-  once and the means sum to zero) by rounding error; mid-scan and with upsampling it removes the
-  static bright-field pattern deposited at the scan front and on the upsampled sub-lattice.
+  placed at their shifts, so it is applied once here rather than per frame. Together with the
+  per-frame mean (`subtract_frame_mean`) this is the double-centering quantem does (the two
+  commute). On a fully-scanned, unupsampled wrap (where every output pixel receives each BF pixel
+  once) it only removes a constant; mid-scan and with upsampling it removes the static
+  bright-field pattern deposited at the scan front and on the upsampled sub-lattice. It keeps the
+  amplitude contrast, which the per-frame mean removes.
 - **coverage**: the number of deposits each output pixel has received, likewise a convolution of
   the comb with the shift histogram, for normalizing a partial scan (`mean * support`, quantem's
   `_moments_from_buffers`).

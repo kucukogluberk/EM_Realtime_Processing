@@ -44,10 +44,11 @@ usage: python -m realtime_stem.apps.run [-h] [--algorithm {parallax}]
                                         [--upsampling U] [--energy EV] [--semiangle MRAD]
                                         [--angular-sampling MRAD_PX] [--scan-sampling ANG_PX]
                                         [--center ROW COL] [--scan NY NX] [--flip-cols]
-                                        [--detector-layout LAYOUT] [--no-phase-flip]
-                                        [--no-dc-correct] [--normalize] [--coverage] [--lowpass Q]
-                                        [--highpass Q] [--butterworth-order N]
-                                        [--suppress-nyquist {auto,on,off}] [--band-limit]
+                                        [--detector-layout LAYOUT] [--subtract-frame-mean]
+                                        [--no-phase-flip] [--no-dc-correct] [--normalize]
+                                        [--coverage] [--lowpass Q] [--highpass Q]
+                                        [--butterworth-order N] [--suppress-nyquist {auto,on,off}]
+                                        [--band-limit]
 ```
 
 **general**
@@ -111,6 +112,12 @@ usage: python -m realtime_stem.apps.run [-h] [--algorithm {parallax}]
 | `--scan NY NX` |  | Scan grid; must match what the microscope drives. Required. |
 | `--flip-cols` | flag | The detector's columns are reversed relative to the canonical layout (LiberTEM's detector_flip_cols). With --rotation this covers every transpose/flip: e.g. a transposed detector is --rotation +90 --flip-cols. Give --center as measured on the raw frames. Table in docs/GUIDE.md. |
 | `--detector-layout LAYOUT` |  | What the raw frame's (axis 0, axis 1) hold relative to the canonical (rows, cols) layout: rows,cols \| rows,-cols \| -rows,cols \| -rows,-cols \| cols,rows \| cols,-rows \| -cols,rows \| -cols,-rows. E.g. 'cols,-rows' = transposed with the second axis reversed. Adds the matching rotation and column flip to --rotation; give --center as measured on the raw frames. Exclusive with --flip-cols. |
+
+**parallax frame processing (per frame, as frames arrive)**
+
+| parameter | default | description |
+|---|---|---|
+| `--subtract-frame-mean` | flag | Subtract each frame's mean over its bright-field pixels before it is added in (as the reference implementation does). This removes the amplitude contrast (mass-thickness, diffraction) over regions larger than about the probe, and the frame-to-frame changes in beam intensity. Default: off, the mean is kept. |
 
 **parallax readout (live channels and saved images)**
 

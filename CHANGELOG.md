@@ -8,8 +8,9 @@ docker/Dockerfile .`, so the versions can be switched back and forth.
 
 New in this release: a live phase-flipped image, any detector orientation, continuous scanning
 for live tuning, and a pure-Python ingest that runs the same processing without an NVIDIA GPU,
-with a simulator and a notebook view. The parallax math is unchanged (`parallax_recon.npy` is
-the same image as in 2.0.2), and so are the C++/CUDA operators (still 2.0.1).
+with a simulator and a notebook view. The C++/CUDA operators are unchanged (still 2.0.1). The
+per-frame mean is now kept by default (see below); with `--subtract-frame-mean`,
+`parallax_recon.npy` is the same image as in 2.0.2.
 
 **Live channels** (`processing/parallax/readout.py`), computed from the accumulated sum at each
 snapshot, with no per-frame cost:
@@ -100,6 +101,14 @@ Contributed by Georgios Varnavides.
   values in `FLAGS`. The simulator's `.flags` include `--center`.
 - The start-up summary prints the bright-field disk's radius (semiangle ÷ angular sampling) and
   warns when part of the disk falls outside the frame (those pixels were dropped silently).
+- **The frame mean is kept by default.** Up to now each frame's mean over its bright-field
+  pixels was subtracted before the frame was added in. That mean is the bright-field intensity at
+  the scan position, so the subtraction removed the amplitude contrast (mass-thickness,
+  diffraction contrast) over regions larger than about the probe, and the images looked flat. On
+  a recorded ARINA scan it lowered the image's standard deviation by a quarter and removed nearly
+  all of the contrast below 6 cycles per field of view. `--subtract-frame-mean` restores the
+  previous behaviour (identical images); it also removes frame-to-frame changes in beam
+  intensity. The start-up summary says which is used.
 - `tools/detector_setup.py`: `check` (read only) and `apply` the DCU settings the pipeline needs,
   `arm`, `disarm`, and `scan` (arm, a site's own `start_scan()`, disarm). The scan generator is
   left to each site.

@@ -127,6 +127,8 @@ changing anything used live.
 - The acquisition values (`--energy`, `--semiangle`, `--angular-sampling`, `--scan-sampling`,
   `--scan`, `--defocus`, `--rotation`, `--center`) are required: `Algorithm.check_args` stops the run and
   lists the missing ones. Do not add defaults for them.
+- The per-frame mean is kept unless `--subtract-frame-mean` is given (it removes the amplitude
+  contrast). Do not make the subtraction the default again.
 - `--scan NY NX` must equal the scan; frames are placed by their `image_id` (raster index), so
   arrival order does not matter but extra frames (e.g. flyback) do.
 - The frame size and type must match the detector mode: `--binned` (96×96) or `--detector`, and

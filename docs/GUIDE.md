@@ -262,11 +262,21 @@ runner exits) reaches connected subscribers rather than being dropped with the q
 
 ## Live channels (readout)
 
-The hot path only deposits shifted, frame-mean-subtracted bright-field values into one buffer,
-plus two small side accumulators: the visits per scan position and each BF pixel's running sum (an
+The hot path only deposits shifted bright-field values into one buffer, plus two small side
+accumulators: the visits per scan position and each BF pixel's running sum (an
 O(B·M) add per batch, 2–7% of `process()`). Everything linear and shift-invariant over the scan is
 applied to the accumulated sum when a snapshot is taken (`processing/parallax/readout.py`), so it
-costs nothing per frame:
+costs nothing per frame.
+
+**The frame mean.** By default each frame's bright-field values are added in as they are.
+`--subtract-frame-mean` subtracts each frame's mean over its bright-field pixels first, as the
+reference implementation does. That mean is the bright-field intensity at the scan position, so
+subtracting it removes the amplitude contrast (mass-thickness, diffraction contrast) over regions
+larger than about the probe, together with frame-to-frame changes in beam intensity. On a recorded
+ARINA scan (256×256, largest shift 6 px) it removed nearly all of the image's power below 6 cycles
+per field of view and 40% between 12 and 24, and lowered the image's standard deviation by a
+quarter; detail finer than that is unchanged. Use it when only the phase contrast is wanted, or
+when the beam intensity drifts during the scan.
 
 | channel / flag | what it is |
 |---|---|
@@ -289,10 +299,10 @@ Why each is exact:
   overflow into the next row (a ~120% error on the apoferritin data); the readout wraps each axis.
 - **Per-BF scan-mean removal** (quantem's `_preprocess`). Subtracting each BF pixel's mean from
   all its deposits is a convolution of the comb of position visits with the means placed at their
-  shifts, so it is applied at readout. With the per-frame mean the hot path already removes, this
-  is double-centering. On a complete, unupsampled wrap it changes nothing (every output pixel
-  receives each BF pixel once, and the means sum to zero), but on apoferritin it changes a half
-  scan by 22% (25–37% next to the scan front, where the static BF pattern piles up) and a complete
+  shifts, so it is applied at readout. Together with `--subtract-frame-mean` this is
+  double-centering. On a complete, unupsampled wrap it only removes a constant (every output pixel
+  receives each BF pixel once); the amplitude contrast stays. With the frame mean subtracted, on
+  apoferritin it changes a half scan by 22% (25–37% next to the scan front, where the static BF pattern piles up) and a complete
   upsampling-2 scan by 10% (removing 42% of its Nyquist power).
 - **Coverage** is the comb convolved with the shift histogram.
 

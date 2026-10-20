@@ -191,3 +191,11 @@ def test_readout_flags_map_to_config():
     assert not cfg.phase_flip and not cfg.dc_correct and cfg.normalize and cfg.coverage_channel
     assert cfg.q_lowpass == 0.2 and cfg.q_highpass == 0.01
     assert cfg.suppress_nyquist is False and cfg.band_limit
+
+
+def test_frame_mean_is_kept_unless_asked():
+    """The per-frame mean subtraction removes amplitude contrast: off unless the flag is given."""
+    algo = registry.get("parallax")
+    assert not algo.build(_args(["--binned", *ACQUISITION, "--device", "cpu"])).subtract_frame_mean
+    acc = algo.build(_args(["--binned", *ACQUISITION, "--device", "cpu", "--subtract-frame-mean"]))
+    assert acc.subtract_frame_mean

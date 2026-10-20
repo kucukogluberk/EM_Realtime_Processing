@@ -42,6 +42,13 @@ class ParallaxAlgorithm(Algorithm):
             help="ARINA 2×2-binned preset: 96×96 detector (give --angular-sampling of the "
                  "binned mode).")
         add_tuning_args(g)        # --defocus/--rotation/--upsampling/physics/--scan/--center
+        f = parser.add_argument_group("parallax frame processing (per frame, as frames arrive)")
+        f.add_argument(
+            "--subtract-frame-mean", action="store_true",
+            help="Subtract each frame's mean over its bright-field pixels before it is added in "
+                 "(as the reference implementation does). This removes the amplitude contrast "
+                 "(mass-thickness, diffraction) over regions larger than about the probe, and the "
+                 "frame-to-frame changes in beam intensity. Default: off, the mean is kept.")
         add_readout_args(parser)  # --no-phase-flip/--no-dc-correct/--normalize/filters
 
     def preprocess_argv(self, argv: list[str]) -> list[str]:
@@ -70,7 +77,8 @@ class ParallaxAlgorithm(Algorithm):
               f"C10 = {cfg.aberration_coefs.get('C10', 0.0):.4g} Å, rotation = {rot_deg:.4g}°, "
               f"max |shift| = {int(np.abs(geo.shifts).max())} px, upsampling = {cfg.upsampling_factor}, "
               f"angular sampling = {cfg.angular_sampling[0]:.4g} mrad/px, disk center = {center_str}"
-              f"{', columns flipped' if cfg.flip_cols else ''}",
+              f"{', columns flipped' if cfg.flip_cols else ''}, frame mean "
+              f"{'subtracted' if getattr(args, 'subtract_frame_mean', False) else 'kept'}",
               flush=True)
         radius = cfg.semiangle_cutoff / cfg.angular_sampling[0]
         print(f"[parallax] BF disk radius = {radius:.3g} px (semiangle {cfg.semiangle_cutoff:g} mrad"
@@ -86,7 +94,8 @@ class ParallaxAlgorithm(Algorithm):
         acc = ParallaxAccumulator(geo, device=getattr(args, "device", None),
                                   readout=readout_from_args(args),
                                   accumulate="latest" if mode == "latest" else "all",
-                                  wrap_ids=mode != "scan")
+                                  wrap_ids=mode != "scan",
+                                  subtract_frame_mean=getattr(args, "subtract_frame_mean", False))
         if mode == "latest":
             itemsize = 4 if getattr(args, "dtype", "uint16") == "uint32" else 2
             print(f"[parallax] accumulate=latest: keeping the newest frame per scan position "
