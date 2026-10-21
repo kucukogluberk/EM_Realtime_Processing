@@ -104,3 +104,40 @@ def test_repeated_ids_parse_in_the_c_receiver(tmp_path):
                                                ctypes.byref(size), ctypes.byref(orig),
                                                ctypes.byref(elem), ctypes.byref(iid))
         assert rc == 0 and iid.value == new and orig.value == 512
+
+
+def test_a_per_pass_loop_replays_as_separate_series(tmp_path):
+    """`tools/replay_to_zmq.py` sends each series' end in order (not only one at the end of the
+    file), so a per-pass loop reaches `run.py --continuous` as one series per pass."""
+    import threading
+
+    import zmq
+
+    from tools.repeat_dstream import main
+    from tools.replay_to_zmq import replay_dstream
+    from tools.dstream import envelope_type
+
+    _capture(tmp_path / "s.dstream", n=20)
+    main([str(tmp_path / "s.dstream"), str(tmp_path / "p.dstream"), "--passes", "3",
+          "--series", "per-pass"])
+    ctx = zmq.Context.instance()
+    pull = ctx.socket(zmq.PULL)
+    port = pull.bind_to_random_port("tcp://127.0.0.1")
+    pull.close()                                          # free the port for the feeder
+    endpoint = f"tcp://127.0.0.1:{port}"
+    feeder = threading.Thread(target=replay_dstream, args=(str(tmp_path / "p.dstream"), endpoint),
+                              kwargs={"linger_s": 0.5}, daemon=True)
+    feeder.start()
+    pull = ctx.socket(zmq.PULL)
+    pull.connect(endpoint)
+    types = []
+    while len(types) < 3 * 22:
+        if pull.poll(5000):
+            types.append(envelope_type(pull.recv()))
+        else:
+            break
+    pull.close()
+    starts = [i for i, t in enumerate(types) if t == "start"]
+    ends = [i for i, t in enumerate(types) if t == "end"]
+    assert len(starts) == 3 and len(ends) == 3
+    assert all(s < e for s, e in zip(starts, ends)) and all(e < s for e, s in zip(ends, starts[1:]))
