@@ -10,6 +10,8 @@ detector or an NVIDIA GPU, the same processing also runs on a laptop, on recorde
 data.
 
 - [`docs/GUIDE.md`](docs/GUIDE.md): the full technical guide
+- [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md): from a recording to a live demo (browser viewer,
+  calibration, offline reconstruction, looping a scan, a focus-walk demo)
 - [`docs/CLI.md`](docs/CLI.md): every command-line option
 - [`CHANGELOG.md`](CHANGELOG.md): what changed between versions
 - [`AGENTS.md`](AGENTS.md): orientation for AI coding assistants
@@ -25,7 +27,9 @@ realtime_stem/        the Python package
 operators/            the C++/CUDA frame receiver and GPU decompressor
 docker/Dockerfile     builds the Docker image
 examples/             live viewer, notebook, sample recording
-tools/                stream recorder, replay, simulator, detector setup
+tools/                stream recorder, replay, simulator, detector setup, geometry calibration,
+                      looping and refocusing a recording
+out_gd2o3_30mrad/     a worked example: the Gd2O3 session of 2026-10-20 (scripts, figures; data not in git)
 scripts/              installation check and demos
 tests/                unit tests
 ```
