@@ -59,6 +59,9 @@ INTROS = {
     "tools.repeat_dstream": "Loop a recorded scan into a continuous acquisition: N passes in one "
                             "`.dstream` (ids running on, or a series per pass), optionally with "
                             "specimen drift; only `image_id` is rewritten.",
+    "tools.refocus_dstream": "Emulate turning the focus knob on a recorded scan: each pass is the "
+                             "recording as at another microscope defocus (each bright-field "
+                             "pixel's image moved by the parallax shift of the change).",
     "tools.replay_to_zmq": "Replay a `.dstream` capture over ZMQ PUSH, as the DCU would send it.",
     "tools.record_dstream": "Record a live stream (the DCU, or a feeder) verbatim into a "
                             "`.dstream` capture. Nothing else may listen to the DCU meanwhile.",
@@ -85,6 +88,7 @@ SHORT = {
     "tools.simulate_4dstem": "simulate parallax datasets (incl. focus-tuning sessions)",
     "tools.calibrate_parallax": "measure centre, flip, rotation and defocus from a recording",
     "tools.repeat_dstream": "loop a recording into repeated passes",
+    "tools.refocus_dstream": "a recording at other defocus values (focus-walk demos)",
     "tools.replay_to_zmq": "replay a capture as a live stream",
     "tools.record_dstream": "record a live stream into a capture",
     "tools.npy_to_dstream": "convert a 4D `.npy` into a capture",
@@ -106,6 +110,7 @@ def _parsers():
 
     out = [("run", run.build_parser(registry.get("parallax")))]
     for mod in ("tools.simulate_4dstem", "tools.calibrate_parallax", "tools.repeat_dstream",
+                "tools.refocus_dstream",
                 "tools.replay_to_zmq",
                 "tools.record_dstream",
                 "tools.npy_to_dstream", "tools.make_dstream", "tools.dstream", "tools.detector_setup",

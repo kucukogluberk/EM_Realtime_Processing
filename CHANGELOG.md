@@ -22,6 +22,9 @@ recording.**
 - **`tools/repeat_dstream.py`** loops a recorded scan into N passes: one series or one per pass,
   optionally with drift. Only `image_id` is rewritten, and the receiver's C parser reads the
   patched ids.
+- **`tools/refocus_dstream.py`** turns the focus knob on a recording. Pass k is the scan as at
+  microscope defocus C10_k: each bright-field pixel's image is moved by the parallax shift of the
+  change. Use it for demos of live tuning on real data.
 - **`scripts/compare_accumulate.py`** compares the modes on a looped capture.
   `scripts/bench_accumulator.py` times `reset` / `swap` too: 985 kHz against 1,123 kHz for `all`
   on `mps` at M = 1249.

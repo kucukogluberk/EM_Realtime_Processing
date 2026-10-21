@@ -13,6 +13,7 @@ changed recently, [CHANGELOG.md](../CHANGELOG.md).
 | [`python -m tools.simulate_4dstem`](#python--m-toolssimulate_4dstem) | simulate parallax datasets (incl. focus-tuning sessions) |
 | [`python -m tools.calibrate_parallax`](#python--m-toolscalibrate_parallax) | measure centre, flip, rotation and defocus from a recording |
 | [`python -m tools.repeat_dstream`](#python--m-toolsrepeat_dstream) | loop a recording into repeated passes |
+| [`python -m tools.refocus_dstream`](#python--m-toolsrefocus_dstream) | a recording at other defocus values (focus-walk demos) |
 | [`python -m tools.replay_to_zmq`](#python--m-toolsreplay_to_zmq) | replay a capture as a live stream |
 | [`python -m tools.record_dstream`](#python--m-toolsrecord_dstream) | record a live stream into a capture |
 | [`python -m tools.npy_to_dstream`](#python--m-toolsnpy_to_dstream) | convert a 4D `.npy` into a capture |
@@ -254,6 +255,31 @@ usage: python -m tools.repeat_dstream [-h] --passes N [--series {one,per-pass}] 
 | `--series {one,per-pass}` | `one` | one: a single series, ids running on (plays with run.py --source). per-pass: a series per pass, ids restarting (replay over ZeroMQ to run.py --continuous). |
 | `--scan NY NX` |  | The scan grid (default: as many positions as the recording has frames; needed for --drift). |
 | `--drift DY DX` | `0 0` | Specimen drift per pass in scan pixels (integers, wrapping round the field); pass k is then sent in raster order. |
+
+## `python -m tools.refocus_dstream`
+
+Emulate turning the focus knob on a recorded scan: each pass is the recording as at another microscope defocus (each bright-field pixel's image moved by the parallax shift of the change).
+
+```text
+usage: python -m tools.refocus_dstream [-h] --flags FILE --defocus-schedule C10 [C10 ...]
+                                       [--series {one,per-pass}]
+                                       src dst
+```
+
+**arguments**
+
+| parameter | default | description |
+|---|---|---|
+| `src` | required | A recorded scan (.dstream), one frame per position. |
+| `dst` | required | The .dstream to write, one pass per schedule entry. |
+
+**general**
+
+| parameter | default | description |
+|---|---|---|
+| `--flags FILE` | required | The recording's run.py flags (geometry and its own --defocus), e.g. from tools/calibrate_parallax.py. |
+| `--defocus-schedule C10 [C10 ...]` | required | The microscope's C10 (Å) on each pass. Plain numbers (-500, not -5e2). |
+| `--series {one,per-pass}` | `one` | one: a single series, ids running on (plays with run.py --source). per-pass: a series per pass (replay to run.py --continuous). |
 
 ## `python -m tools.replay_to_zmq`
 

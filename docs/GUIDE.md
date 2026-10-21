@@ -437,6 +437,17 @@ python -m realtime_stem.apps.run --accumulate latest --scan 256 256 --binned \
   - `reset` correlates 0.69 with the pass in progress, with half the image empty.
   - `all` blurs the passes together.
   - At each pass's end, every mode but `all` equals that pass.
+- **A focus walk on a recording** (for demos of live tuning).
+  `python -m tools.refocus_dstream scan.dstream walk.dstream --flags scan.flags
+  --defocus-schedule -500 -450 -400 -350 -300 -316 -316 -316` writes pass k as the recording would
+  look at microscope defocus C10_k.
+  - Under the parallax model a defocus change ΔC10 only moves each bright-field pixel's image by
+    ΔC10·α (rotated, flipped as the geometry says), so each pixel's image is moved by that, in
+    whole scan pixels.
+  - Reconstruct with the recording's own flags (the target) and the passes sharpen as the
+    schedule reaches it.
+  - Checked with the calibration: a pass written at −500 Å from a −316 Å recording measures
+    −501 Å.
 - **Batch size.** With `latest`, a batch must not hold the same position twice, so
   `--batch-size` ≤ scan positions (enforced).
 - **Cadence.** "Rows per update" is `--live-every-rows N`; the alternative is `--live-every`

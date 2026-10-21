@@ -141,3 +141,34 @@ def test_a_per_pass_loop_replays_as_separate_series(tmp_path):
     ends = [i for i, t in enumerate(types) if t == "end"]
     assert len(starts) == 3 and len(ends) == 3
     assert all(s < e for s, e in zip(starts, ends)) and all(e < s for e, s in zip(ends, starts[1:]))
+
+
+def test_refocus_emulates_the_focus_knob(tmp_path):
+    """`tools/refocus_dstream.py`: a pass at another microscope defocus measures as that defocus
+    (tools/calibrate_parallax.py), with the recording's rotation and flip; a pass at the
+    recording's own defocus is the recording."""
+    from realtime_stem.ingest.codec import decode_message
+    from realtime_stem.ingest.dstream import iter_records
+    from tools.calibrate_parallax import calibrate, file_batches
+    from tools.refocus_dstream import main
+    from tools.simulate_4dstem import SimParams, write
+
+    p = SimParams(scan=(48, 48), detector=(64, 64), semiangle=10, angular_sampling=0.5,
+                  scan_step=2.0, aberrations={"C10": -800.0}, rotation_deg=20,
+                  detector_layout="rows,-cols", dose=20000, n_particles=8, seed=4)
+    meta = write(p, tmp_path / "s", formats=("dstream",), device="cpu")
+    main([str(tmp_path / "s.dstream"), str(tmp_path / "w.dstream"), "--flags",
+          str(tmp_path / "s.flags"), "--defocus-schedule", "-1100", "-800"])
+    cal = calibrate(file_batches(tmp_path / "w.dstream"), p.scan, p.energy, p.semiangle,
+                    p.angular_sampling, meta["grid"]["scan_step"], rotation_prior=20,
+                    loss=False, bootstrap=10, log=lambda *a: None)    # measures pass 0
+    g = cal.geometry
+    assert g["flip_cols"] and abs(g["rotation_deg"] - 20) < 1.5
+    assert g["c10"] == pytest.approx(-1100, rel=0.05)
+    n = 48 * 48
+    orig = {i: f for t, i, f in map(decode_message, iter_records(tmp_path / "s.dstream")) if t == "image"}
+    later = [(i, f) for t, i, f in map(decode_message, iter_records(tmp_path / "w.dstream"))
+             if t == "image" and i >= n]
+    assert len(later) == n
+    for i, f in later:
+        np.testing.assert_array_equal(f, orig[i - n])
