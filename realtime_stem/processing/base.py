@@ -92,3 +92,10 @@ class Algorithm(ABC):
         `tag` is non-empty in continuous mode (e.g. "scan003"): then also keep a copy of this
         scan's result under a name containing it, so a session does not overwrite its scans.
         """
+
+    def save_pass(self, acc: Accumulator, out_dir: Path, k: int, dtype: str = "float32",
+                  executor=None) -> None:
+        """Write the image of completed pass `k` of a repeated scan (`--save-passes`), called
+        from the hot path when the pass completes: take the arrays now, and write them through
+        `executor` (a single-thread pool) when one is given. Optional (default: unsupported)."""
+        raise NotImplementedError(f"{self.name} does not save passes")

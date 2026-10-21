@@ -407,6 +407,36 @@ python -m realtime_stem.apps.run --accumulate latest --scan 256 256 --binned \
   "pass 3 at 47% (latest)". The final frame is published only when the run ends.
 - **`--accumulate all`** keeps every frame of every pass (averaging once the microscope is
   settled); the default `scan` is one reconstruction per series, as before.
+- **`--accumulate reset | swap`** start a fresh image with each pass (pass = `id // positions`)
+  and keep the last completed pass as the saved image. Neither needs `latest`'s store: one more
+  image instead (positions × bright-field pixels × 2 bytes → Ny·U × Nx·U × 4 bytes).
+  - `reset` shows the current pass alone, filling in.
+  - `swap` shows the current pass on the output rows it has completed and the last completed
+    pass elsewhere. A row is complete once every scan row whose shifted deposits land on it is
+    done, the torus wrap included. So the image is never partial, and the seam is no wider than
+    the parallax shifts.
+  - `--pass-average β` blends each completed pass into the shown one
+    (front ← (1 − β)·front + β·pass): a running average for movies of a settled area.
+  - Frames of a pass that arrive after the next one started (stragglers across connections) go
+    into the completed pass (`swap`) or are dropped (`reset`); the snapshot metadata counts them
+    (`late_frames`).
+- **Movies: `--save-passes`.**
+  - With any repeated-scan mode, each completed pass's channels are written to
+    `<out-dir>/passes/parallax_<channel>_passNNNN.npy` (float32, or `--save-passes-dtype
+    float16`), off the hot path.
+  - With `latest` the image at a pass boundary is exactly that pass.
+  - A pass completes when the next one starts, or when its series ends on its last position.
+- **Trying it on a recording.** `python -m tools.repeat_dstream scan.dstream loop.dstream
+  --passes 8` loops a recorded scan into one series of 8 passes (`--series per-pass` for a series
+  each, `--drift DY DX` to move the specimen between passes). Play it with `run.py --source
+  loop.dstream …`, or replay it over ZeroMQ. `scripts/compare_accumulate.py loop.dstream <flags>`
+  shows each mode's live image part-way through each pass, against the true pass images:
+  - On the binned Gd₂O₃ scan looped 4× with a (3, 4) px drift per pass, halfway through a pass
+    `latest` and `swap` correlate 0.51 / 0.49 with the pass in progress and 0.55 / 0.56 with the
+    one before.
+  - `reset` correlates 0.69 with the pass in progress, with half the image empty.
+  - `all` blurs the passes together.
+  - At each pass's end, every mode but `all` equals that pass.
 - **Batch size.** With `latest`, a batch must not hold the same position twice, so
   `--batch-size` ≤ scan positions (enforced).
 - **Cadence.** "Rows per update" is `--live-every-rows N`; the alternative is `--live-every`
@@ -613,8 +643,8 @@ issues). For the end-to-end rate on a given machine, replay a recording with
   reports the scan as incomplete). The DCU counts
   them: `GET http://<DCU_IP>/stream/api/1.8.0/status/dropped`. In `--continuous` mode the
   connection stays open between scans.
-- **Continuous scanning assumes one frame per scan position.** `--accumulate latest | all` map
-  image id → position as `id % positions`. A scan generator that adds fly-back or settling
+- **Continuous scanning assumes one frame per scan position.** `--accumulate latest | all |
+  reset | swap` map image id → position as `id % positions`. A scan generator that adds fly-back or settling
   triggers between lines or passes breaks that mapping (commissioning test 3 detects it).
 - **`--accumulate latest` costs memory and time.** It keeps every position's newest frame on the
   device (positions × bright-field pixels × 2 bytes: 160 MB at 256², 2.6 GB at 1024²) and costs
@@ -698,7 +728,8 @@ skips cleanly without CUDA.
 - The ingest tests replay over ZMQ, including the multi-connection end race and back-to-back
   scans, and round-trip the recorder.
 - The continuous-scanning tests pin `--accumulate latest` / `all` (see "Commissioning on the
-  microscope"), the notebook-view tests the bounded history and pass-aware snapshots.
+  microscope"), `tests/test_pass_modes.py` `reset` / `swap` / `--pass-average` / `--save-passes`
+  and the looping tool, the notebook-view tests the bounded history and pass-aware snapshots.
 - `tests/test_cli_reference.py` fails if `docs/CLI.md` no longer matches the parsers, or a
   parameter has no description.
 - The simulator tests pin the shared conventions through the parallax variance criterion.

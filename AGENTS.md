@@ -139,8 +139,9 @@ changing anything used live.
 - `--batch-size` is capped at 2048 at compile time (`kMaxBatchSize`,
   `operators/cpp/common/constants.h`); 2048 is the tested default.
 - `--scheduler-threads 0` (single-threaded, default) is the tested, fastest setting.
-- `--accumulate latest | all` map image id → position as `id % positions`, so they need exactly
-  one frame per scan position; `latest` also needs `--batch-size` ≤ the scan positions.
+- `--accumulate latest | all | reset | swap` map image id → position as `id % positions` (pass =
+  `id // positions`), so they need exactly one frame per scan position; `latest` also needs
+  `--batch-size` ≤ the scan positions, and `swap`'s live composite assumes raster order.
 - A change to a command-line flag needs `python scripts/gen_cli_reference.py` (a test checks
   that `docs/CLI.md` is current).
 - The DCU's stream compression must be `bslz4`.

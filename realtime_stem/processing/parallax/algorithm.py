@@ -93,14 +93,21 @@ class ParallaxAlgorithm(Algorithm):
         mode = getattr(args, "accumulate", "scan")
         acc = ParallaxAccumulator(geo, device=getattr(args, "device", None),
                                   readout=readout_from_args(args),
-                                  accumulate="latest" if mode == "latest" else "all",
+                                  accumulate="all" if mode == "scan" else mode,
                                   wrap_ids=mode != "scan",
-                                  subtract_frame_mean=getattr(args, "subtract_frame_mean", False))
+                                  subtract_frame_mean=getattr(args, "subtract_frame_mean", False),
+                                  track_passes=bool(getattr(args, "save_passes", False)),
+                                  pass_average=getattr(args, "pass_average", 1.0))
         if mode == "latest":
             itemsize = 4 if getattr(args, "dtype", "uint16") == "uint32" else 2
             print(f"[parallax] accumulate=latest: keeping the newest frame per scan position "
                   f"(~{acc.store_bytes(itemsize) / 1e6:,.0f} MB on {acc.device}; the Python "
                   f"ingest stores 32-bit)", flush=True)
+        elif mode in ("reset", "swap"):
+            avg = getattr(args, "pass_average", 1.0)
+            print(f"[parallax] accumulate={mode}: a fresh image per pass, the last completed pass "
+                  f"kept" + (f", blended with weight {avg:g}" if mode == "swap" and avg < 1 else "")
+                  + f" (~{2 * acc.out.numel() * 4 / 1e6:,.0f} MB on {acc.device})", flush=True)
         return acc
 
     # readout channel → saved file (the raw sum keeps its historical name)
@@ -124,3 +131,24 @@ class ParallaxAlgorithm(Algorithm):
         np.save(out_dir / "parallax_shifts.npy", acc.geometry.shifts)   # parallax-specific extra
         print(f"[parallax] saved {' + '.join(names)} + parallax_shifts.npy to {out_dir}",
               flush=True)
+
+    def save_pass(self, acc: Accumulator, out_dir: Path, k: int, dtype: str = "float32",
+                  executor=None) -> None:
+        """The readout channels of completed pass `k` → `<out_dir>/passes/parallax_<channel>_
+        passNNNN.npy` (`parallax_corrected_…`, `parallax_phase_flipped_…`): a movie of the
+        session, one frame per pass. The arrays are copied to the host here; the files are
+        written by `executor` when given, off the hot path."""
+        images = {k_: v.astype(dtype) for k_, v in acc.images().items() if k_ != "raw"}
+        folder = out_dir / "passes"
+
+        def write():
+            folder.mkdir(parents=True, exist_ok=True)
+            for channel, image in images.items():
+                name = self._FILES.get(channel, f"parallax_{channel}.npy")
+                np.save(folder / name.replace(".npy", f"_pass{k:04d}.npy"), image)
+            print(f"[parallax] pass {k} saved to {folder}", flush=True)
+
+        if executor is None:
+            write()
+        else:
+            executor.submit(write)

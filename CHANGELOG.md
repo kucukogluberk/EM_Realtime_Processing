@@ -6,6 +6,26 @@ docker/Dockerfile .`, so the versions can be switched back and forth.
 
 ## Unreleased
 
+**Continuous modes `--accumulate reset | swap`, movies with `--save-passes`, and looping a
+recording.**
+
+- **`reset`** starts a fresh image with each pass, so the live view is the current pass filling
+  in.
+- **`swap`** shows the current pass on the rows it has completed and the last completed pass
+  elsewhere, never partial. `--pass-average β` makes it a running average of passes.
+- **Saving and memory:** both save the last completed pass and need one more image rather than
+  `latest`'s store (1 MB against 649 MB for the binned Gd₂O₃ scan at ×2).
+- **Pass boundaries:** batches are split at pass boundaries, and stragglers of a closed pass are
+  counted.
+- **`--save-passes`** writes each completed pass's channels to `<out-dir>/passes/`, a movie of the
+  session, from a background thread.
+- **`tools/repeat_dstream.py`** loops a recorded scan into N passes: one series or one per pass,
+  optionally with drift. Only `image_id` is rewritten, and the receiver's C parser reads the
+  patched ids.
+- **`scripts/compare_accumulate.py`** compares the modes on a looped capture.
+  `scripts/bench_accumulator.py` times `reset` / `swap` too: 985 kHz against 1,123 kHz for `all`
+  on `mps` at M = 1249.
+
 **Browser viewer: `python -m realtime_stem.streaming.web tcp://<host>:5601`.** A page on localhost
 replaces the matplotlib window as the recommended viewer.
 

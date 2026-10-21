@@ -69,7 +69,7 @@ class BatchSink:
         if max_id >= self._n_positions and not self._wrap_ids:
             raise ValueError(
                 f"image_id {max_id} >= scan positions {self._n_positions} — --scan doesn't match "
-                f"the acquisition, or the scan repeats (use --accumulate latest / all)."
+                f"the acquisition, or the scan repeats (use --accumulate latest, all, reset or swap)."
             )
         self.acc.process(frames, ids)
         self._mark_seen(ids)

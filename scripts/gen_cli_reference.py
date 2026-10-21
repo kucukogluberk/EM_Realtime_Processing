@@ -56,6 +56,9 @@ INTROS = {
                                 "write the `run.py` flags. Departures from a quadratic aberration "
                                 "surface (C30, C21, C23) are reported as a diagnostic only: "
                                 "parallax corrects quadratic aberrations alone.",
+    "tools.repeat_dstream": "Loop a recorded scan into a continuous acquisition: N passes in one "
+                            "`.dstream` (ids running on, or a series per pass), optionally with "
+                            "specimen drift; only `image_id` is rewritten.",
     "tools.replay_to_zmq": "Replay a `.dstream` capture over ZMQ PUSH, as the DCU would send it.",
     "tools.record_dstream": "Record a live stream (the DCU, or a feeder) verbatim into a "
                             "`.dstream` capture. Nothing else may listen to the DCU meanwhile.",
@@ -73,12 +76,15 @@ INTROS = {
     "examples.probe": "Headless subscriber: report live frames, optionally save the last one.",
     "examples.plot_result": "Plot a saved reconstruction `.npy`.",
     "bench": "Time the parallax hot path and the live readout on the available torch devices.",
+    "compare": "Compare the continuous modes on a looped capture: each mode's live image part-way "
+               "through each pass against the true pass images.",
 }
 
 SHORT = {
     "run": "the pipeline (reconstruct a stream, a capture or a file)",
     "tools.simulate_4dstem": "simulate parallax datasets (incl. focus-tuning sessions)",
     "tools.calibrate_parallax": "measure centre, flip, rotation and defocus from a recording",
+    "tools.repeat_dstream": "loop a recording into repeated passes",
     "tools.replay_to_zmq": "replay a capture as a live stream",
     "tools.record_dstream": "record a live stream into a capture",
     "tools.npy_to_dstream": "convert a 4D `.npy` into a capture",
@@ -90,6 +96,7 @@ SHORT = {
     "examples.probe": "headless live-stream probe",
     "examples.plot_result": "plot a saved result",
     "bench": "benchmark the accumulator",
+    "compare": "compare the continuous modes",
 }
 
 
@@ -98,7 +105,8 @@ def _parsers():
     from realtime_stem.processing import registry
 
     out = [("run", run.build_parser(registry.get("parallax")))]
-    for mod in ("tools.simulate_4dstem", "tools.calibrate_parallax", "tools.replay_to_zmq",
+    for mod in ("tools.simulate_4dstem", "tools.calibrate_parallax", "tools.repeat_dstream",
+                "tools.replay_to_zmq",
                 "tools.record_dstream",
                 "tools.npy_to_dstream", "tools.make_dstream", "tools.dstream", "tools.detector_setup",
                 "realtime_stem.streaming.web", "examples.viewer", "examples.probe",
@@ -109,6 +117,11 @@ def _parsers():
     bench = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bench)
     out.append(("bench", bench.build_parser()))
+    spec = importlib.util.spec_from_file_location(
+        "compare_accumulate", REPO / "scripts" / "compare_accumulate.py")
+    compare = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(compare)
+    out.append(("compare", compare.build_parser()))
     return out
 
 

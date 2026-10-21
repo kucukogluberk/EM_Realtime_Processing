@@ -202,13 +202,29 @@ def build_parser(algorithm: Algorithm) -> argparse.ArgumentParser:
                         "sleep up to 5 ms between checks for work (5-7 ms per batch).")
 
     g = p.add_argument_group("acquisition (one scan, a session of scans, continuous scanning)")
-    g.add_argument("--accumulate", choices=("scan", "latest", "all"), default="scan",
+    g.add_argument("--accumulate", choices=("scan", "latest", "all", "reset", "swap"),
+                   default="scan",
                    help="What the reconstruction holds. scan: one scan per detector series, ids "
                         "must stay within the scan (a fresh reconstruction per series with "
-                        "--continuous). latest: the newest frame at every scan position, kept "
-                        "across repeated scans and series (live tuning while the microscope scans "
-                        "continuously: the image follows the knobs within one scan pass). all: "
-                        "every frame of every repeat (averaging a settled condition).")
+                        "--continuous). For repeated scans of the same area (one long series, or "
+                        "a series per pass with --continuous): latest: the newest frame at every "
+                        "scan position (live tuning: the image follows the knobs within one "
+                        "pass; stores positions x bright-field pixels). all: every frame of "
+                        "every pass (averaging a settled condition). reset: a fresh image each "
+                        "pass, so the live view is the current pass filling in. swap: the "
+                        "current pass on the rows it has completed and the last completed pass "
+                        "elsewhere, never partial (with --pass-average, a running average of "
+                        "passes). reset and swap save the last completed pass and need no store.")
+    g.add_argument("--pass-average", type=float, default=1.0, metavar="BETA",
+                   help="With --accumulate swap: each completed pass is blended into the shown "
+                        "one with this weight, front = (1 - BETA) front + BETA pass (1 = no "
+                        "averaging; 0.3 averages over ~3 passes while following drift).")
+    g.add_argument("--save-passes", action="store_true",
+                   help="With repeated scans (--accumulate latest/all/reset/swap): save each "
+                        "completed pass's channels to <out-dir>/passes/, one file per pass and "
+                        "channel (a movie of the session), written off the hot path.")
+    g.add_argument("--save-passes-dtype", choices=("float32", "float16"), default="float32",
+                   help="Data type of the --save-passes files (float16 halves them).")
     g.add_argument("--continuous", action="store_true",
                    help="Don't exit after one stream: on the series 'end', save results and re-arm "
                         "for the next series (Ctrl-C / docker stop to end); with --accumulate scan "
@@ -260,6 +276,13 @@ def main() -> None:
     parser = build_parser(algorithm)
     args = parser.parse_args(algorithm.preprocess_argv(argv))
     problems = algorithm.check_args(args)
+    if args.pass_average != 1.0 and args.accumulate != "swap":
+        problems.append("--pass-average needs --accumulate swap")
+    if not 0.0 < args.pass_average <= 1.0:
+        problems.append("--pass-average must be in (0, 1]")
+    if args.save_passes and args.accumulate == "scan":
+        problems.append("--save-passes needs repeated scans: --accumulate latest, all, reset or "
+                        "swap (with --accumulate scan --continuous every scan is saved anyway)")
     if problems:
         parser.error("\n".join(problems))
 
@@ -328,11 +351,18 @@ def main() -> None:
         stream = ZmqStream(args.endpoint, args.n_connections)
     rounds_done = 0
     acc = None
+    saver = None
+    if args.save_passes:
+        from concurrent.futures import ThreadPoolExecutor
+        saver = ThreadPoolExecutor(max_workers=1, thread_name_prefix="save-passes")
     try:
         while True:
             rounds_done += 1
             if acc is None or not persistent:
                 acc = algorithm.build(args)   # builds geometry + accumulator, prints a summary
+                if saver is not None:
+                    acc.on_pass_complete = (lambda k, acc=acc: algorithm.save_pass(
+                        acc, args.out_dir, k, args.save_passes_dtype, executor=saver))
             elif hasattr(acc, "start_series"):
                 acc.start_series()            # ids of the new series continue the pass count
             if rounds_done == 1:
@@ -379,6 +409,8 @@ def main() -> None:
                 print("[run] interrupted — saving partial results.", flush=True)
                 finish_scan(app, acc, algorithm, args.out_dir, publisher, tag)
                 break
+            if hasattr(acc, "end_series"):
+                acc.end_series()              # a pass that ended with the series is complete
             last = not continuous or (args.rounds and rounds_done >= args.rounds)
             # a persistent reconstruction is only final when the run ends (the next series keeps
             # updating the same image)
@@ -387,6 +419,8 @@ def main() -> None:
             if last:
                 break
     finally:
+        if saver is not None:
+            saver.shutdown(wait=True)         # every completed pass is on disk before exiting
         if publisher is not None:
             publisher.close()
         if stream is not None:
