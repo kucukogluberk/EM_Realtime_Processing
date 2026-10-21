@@ -22,7 +22,7 @@ Three stages, each changeable on its own:
 |---|---|---|---|
 | ingest: receive + decompress | `operators/` (`ZmqRxOp`, `DecompressGpuOp`), wired in `realtime_stem/ingest/holoscan_graph.py`; or `ingest/python_ingest.py` + `codec.py` (CPU); both feed `ingest/sink.py` | C++/CUDA (operators), Python | operators: **yes**; the rest: no |
 | processing: the reconstruction | `realtime_stem/processing/` (`base.py` contracts, `registry.py`, `parallax/`) | Python + PyTorch | no |
-| stream-out + viewing | `realtime_stem/streaming/` (`live_stream.py`, `display.py`, `notebook.py`), `examples/viewer.py`, `examples/live_view.ipynb` | Python | no |
+| stream-out + viewing | `realtime_stem/streaming/` (`live_stream.py`, `display.py`, `notebook.py`, `web/`: the browser viewer), `examples/viewer.py`, `examples/live_view.ipynb` | Python (+ the viewer's page: JS/WebGL2) | no |
 
 - `realtime_stem/apps/run.py`: the program that is run. It owns the transport flags (endpoint,
   batch, scheduler, connections, live preview, `--continuous`) and never names an algorithm.
@@ -161,7 +161,9 @@ changing anything used live.
 - Building behind a proxy: configure the Docker daemon's proxy, and pass
   `--build-arg HTTP_PROXY=… --build-arg HTTPS_PROXY=…`.
 - Files the container writes belong to root; delete them with sudo or from a container.
-- Viewer on another computer: `ssh -L 5601:127.0.0.1:5601 <server>`, then
-  `python examples/viewer.py tcp://127.0.0.1:5601` there.
+- Viewer on another computer: run `python -m realtime_stem.streaming.web tcp://127.0.0.1:5601` on
+  the server, then `ssh -L 8050:127.0.0.1:8050 <server>` and open http://127.0.0.1:8050 there (only
+  screen-sized images travel). The matplotlib viewer works the same way through
+  `ssh -L 5601:127.0.0.1:5601`.
 
 Diagnosis: `docs/GUIDE.md`, "Known issues and limitations", and `scripts/check_install.sh`.

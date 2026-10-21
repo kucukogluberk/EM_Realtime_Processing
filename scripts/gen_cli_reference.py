@@ -66,6 +66,9 @@ INTROS = {
     "tools.detector_setup": "Set up the DCU for the pipeline over its REST API: `check` (read "
                             "only), `apply`, `arm`, `disarm`, and `scan` (arm, your "
                             "`start_scan`, disarm). Never drives the scan generator.",
+    "realtime_stem.streaming.web": "Browser viewer for the live stream: a page on localhost with "
+                                   "zoom, contrast, colour maps, filters, a Fourier transform and "
+                                   "a history; only the visible region crosses the wire.",
     "examples.viewer": "Desktop live viewer: one panel per channel of the live stream.",
     "examples.probe": "Headless subscriber: report live frames, optionally save the last one.",
     "examples.plot_result": "Plot a saved reconstruction `.npy`.",
@@ -82,6 +85,7 @@ SHORT = {
     "tools.make_dstream": "synthetic random capture (format tests)",
     "tools.dstream": "inspect a capture",
     "tools.detector_setup": "set up, arm and disarm the DCU",
+    "realtime_stem.streaming.web": "browser live viewer",
     "examples.viewer": "desktop live viewer",
     "examples.probe": "headless live-stream probe",
     "examples.plot_result": "plot a saved result",
@@ -97,7 +101,8 @@ def _parsers():
     for mod in ("tools.simulate_4dstem", "tools.calibrate_parallax", "tools.replay_to_zmq",
                 "tools.record_dstream",
                 "tools.npy_to_dstream", "tools.make_dstream", "tools.dstream", "tools.detector_setup",
-                "examples.viewer", "examples.probe", "examples.plot_result"):
+                "realtime_stem.streaming.web", "examples.viewer", "examples.probe",
+                "examples.plot_result"):
         out.append((mod, importlib.import_module(mod).build_parser()))
     spec = importlib.util.spec_from_file_location(
         "bench_accumulator", REPO / "scripts" / "bench_accumulator.py")

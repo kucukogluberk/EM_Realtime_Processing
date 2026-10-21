@@ -167,10 +167,11 @@ docker run --rm --network host --gpus "device=<N>" --ulimit stack=33554432:33554
     --live-endpoint tcp://127.0.0.1:5601 --continuous
 ```
 
-On the host, watch it fill in:
+On the host, watch it fill in: run the browser viewer and open http://127.0.0.1:8050 (see
+"Watching in a browser"):
 
 ```bash
-python examples/viewer.py tcp://127.0.0.1:5601
+python -m realtime_stem.streaming.web tcp://127.0.0.1:5601
 ```
 
 `--continuous` re-arms after each scan's end (one container for a whole session); to tune the
@@ -234,6 +235,42 @@ the same sink. The reconstruction runs on `--device auto` (cuda, then Apple's `m
 
 `pip install -e ".[local,viz,replay]"` installs what this needs. Never install the `local` extra
 into the Holoscan container: it would replace the image's CUDA build of torch.
+
+## Watching in a browser
+
+`python -m realtime_stem.streaming.web tcp://<host>:5601` subscribes to the live stream and
+serves a page at http://127.0.0.1:8050.
+
+- **Only the screen crosses the wire.** The page asks for the region it shows, at the size it
+  shows it (`/view`).
+  - The server averages blocks of pixels down to about the screen's resolution, and sends native
+    pixels once zoomed in.
+  - So a 4096² snapshot (a 512² scan at ×8) costs the browser about what a 512² one does.
+  - On the Mac, a full-field view of a 4096² channel takes ~50 ms to prepare, a 1024² Fourier
+    transform ~15 ms.
+- **Instant contrast.** The browser applies contrast, gamma, the colour map and invert on the GPU
+  (WebGL2), so the sliders don't round-trip.
+- **Controls:**
+  - one panel per channel (linked zoom and pan; wheel / drag / double-click to fit; `f` fit, `1`
+    native pixels);
+  - limits from the whole frame's histogram, the visible view, or manual;
+  - display-only Gaussian high- and low-pass filters, in Å;
+  - a live Fourier transform of the visible region, with q and d-spacing under the cursor;
+  - a scale bar (from the snapshot's `sampling_A`);
+  - the pass / progress line;
+  - pause (space) and a history slider over the kept snapshots (`--history-mb`, 512 MB by
+    default);
+  - PNG of the views, and `.npy` of the full channels.
+- **Links:** URL parameters preset the controls, e.g. `?cmap=inferno&fft=1&hp=20&view=1to1`.
+  `?snapshot[=seq]` shows one snapshot without the live stream.
+- **Another computer:** keep the viewer next to the pipeline and forward its port
+  (`ssh -L 8050:127.0.0.1:8050 <server>`): only screen-sized images travel. Or serve it with
+  `--host 0.0.0.0`.
+- **No new dependencies:** Python's standard library, numpy and pyzmq. The page loads nothing from
+  the internet, since microscope computers are often offline.
+- **Publisher cost:** the stream itself still carries full float32 snapshots. At 4096² × 2
+  channels that is 134 MB per snapshot; on the Mac, `snapshot()` + `pack` take ~55 ms. Raise
+  `--live-every` if the ingest falls behind.
 
 ## Watching in a notebook
 
@@ -621,6 +658,7 @@ realtime_stem/
   streaming/live_stream.py     pack/unpack + PUB/SUB (CONFLATE) transport
   streaming/display.py         PanelFigure: the live-frame rendering shared by the viewers
   streaming/notebook.py        LiveView: the Jupyter subscriber
+  streaming/web/               the browser viewer: server.py + static/index.html (WebGL2)
   apps/run.py                  the runner (transport flags + continuous/rounds loop)
 tools/                         .dstream CLI, stream recorders, replay feeder, npy→.dstream, 4D-STEM
                                simulator (incl. multi-pass focus walks), synthetic-capture generator,

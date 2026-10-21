@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>realtime-stem live</title>
+<style>
+:root { --bg:#101317; --side:#171b21; --fg:#d9dee4; --muted:#8b949f; --accent:#4fa3ff; --ok:#3fbf6f;
+        --bad:#e5534b; --border:#29303a; --field:#0c0f13; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+             font: 13px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { display: grid; grid-template-columns: 300px 1fr; }
+aside { overflow-y: auto; border-right: 1px solid var(--border); padding: 8px 12px 16px; background: var(--side); }
+aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 6px; }
+.row { display: flex; align-items: center; gap: 6px; margin: 5px 0; }
+.row > label:first-child { flex: 1; }
+.row input[type=range] { width: 120px; }
+.row output { width: 54px; text-align: right; }
+input[type=number] { width: 84px; background: var(--field); color: var(--fg); border: 1px solid var(--border);
+                     border-radius: 3px; padding: 2px 4px; font: inherit; }
+select, button { background: var(--field); color: var(--fg); border: 1px solid var(--border); border-radius: 3px;
+                 padding: 3px 7px; font: inherit; cursor: pointer; }
+button:hover, select:hover { border-color: var(--accent); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+.muted { color: var(--muted); }
+#dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); display: inline-block; flex: none; }
+#progress { height: 6px; background: var(--field); border-radius: 3px; overflow: hidden; margin: 6px 0 2px; }
+#progress > div { height: 100%; background: var(--accent); width: 0; }
+#channels label { display: block; margin: 3px 0; }
+#hist { width: 100%; height: 64px; background: var(--field); border: 1px solid var(--border); display: block; }
+main { position: relative; display: grid; gap: 6px; padding: 6px; overflow: hidden; min-height: 0; }
+.panel { position: relative; background: #000; border: 1px solid var(--border); min-height: 0; min-width: 0;
+         display: flex; flex-direction: column; }
+.panel header { display: flex; justify-content: space-between; gap: 8px; padding: 2px 6px; font-size: 12px;
+                background: var(--side); color: var(--muted); white-space: nowrap; overflow: hidden; }
+.panel header .title { color: var(--fg); }
+.stage { position: relative; flex: 1; min-height: 0; cursor: crosshair; }
+.stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.scalebar { position: absolute; left: 12px; bottom: 10px; color: #fff; font-size: 12px; pointer-events: none;
+            text-shadow: 0 0 3px #000, 0 0 2px #000; }
+.scalebar div { height: 4px; background: #fff; box-shadow: 0 0 3px #000; margin-bottom: 3px; }
+#empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+.hint { color: var(--muted); font-size: 11px; margin-top: 4px; }
+</style>
+<script src="static/colormaps.js"></script>
+</head>
+<body>
+<aside>
+  <div class="row" style="margin-top:4px"><span id="dot"></span><b style="flex:1">realtime-stem live</b>
+    <span id="rate" class="muted mono"></span></div>
+  <div id="endpoint" class="muted mono"></div>
+  <div id="progress"><div></div></div>
+  <div id="metaline" class="mono"></div>
+
+  <h2>Channels</h2>
+  <div id="channels"></div>
+  <label class="row"><input type="checkbox" id="fft"> Fourier transform of
+    <select id="fftch"></select></label>
+  <div class="row"><label>FFT size</label>
+    <select id="fftn"><option>256</option><option>512</option><option selected>1024</option></select></div>
+
+  <h2>View</h2>
+  <div class="row"><button id="fit">Fit (f)</button><button id="one">1:1 (1)</button>
+    <label class="row" style="margin:0"><input type="checkbox" id="link" checked> link</label></div>
+  <label class="row"><input type="checkbox" id="smooth" checked> smooth when zoomed in</label>
+  <label class="row"><input type="checkbox" id="scalebar" checked> scale bar</label>
+
+  <h2>Contrast</h2>
+  <div class="row"><label>limits from</label>
+    <select id="cmode"><option value="frame">whole frame</option><option value="view">visible view</option>
+      <option value="manual">manual</option></select></div>
+  <div class="row"><label>low %</label><input type="range" id="plo" min="0" max="10" step="0.05" value="0.5"><output id="plo_o"></output></div>
+  <div class="row"><label>high %</label><input type="range" id="phi" min="90" max="100" step="0.05" value="99.5"><output id="phi_o"></output></div>
+  <div class="row"><label>min / max</label><input type="number" id="mlo" step="any"><input type="number" id="mhi" step="any"></div>
+  <canvas id="hist"></canvas>
+  <div class="row"><label>gamma</label><input type="range" id="gamma" min="0.25" max="3" step="0.05" value="1"><output id="gamma_o"></output></div>
+  <div class="row"><label>colour map</label><select id="cmap"></select></div>
+  <label class="row"><input type="checkbox" id="invert"> invert</label>
+
+  <h2>Filters (display only)</h2>
+  <div class="row"><label>high-pass σ</label><input type="range" id="hp" min="0" max="200" step="1" value="0"><output id="hp_o"></output></div>
+  <div class="row"><label>low-pass σ</label><input type="range" id="lp" min="0" max="10" step="0.1" value="0"><output id="lp_o"></output></div>
+
+  <h2>History</h2>
+  <label class="row"><input type="checkbox" id="pause"> pause (space)</label>
+  <div class="row"><input type="range" id="scrub" min="0" max="0" step="1" value="0" style="flex:1;width:auto">
+    <button id="live">live</button></div>
+  <div id="histlabel" class="muted mono"></div>
+
+  <h2>Save</h2>
+  <div class="row"><button id="png">PNG of the views</button><button id="npy">.npy (full)</button></div>
+
+  <h2>Cursor</h2>
+  <div id="cursor" class="mono muted">–</div>
+  <div class="hint">Wheel: zoom · drag: pan · double-click: fit</div>
+</aside>
+<main id="panels"><div id="empty">waiting for a snapshot…</div></main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+
+// ── state ────────────────────────────────────────────────────────────────────
+const S = {
+  latest: null, shown: null, paused: false, visible: {}, fft: false, fftCh: null, fftN: 1024,
+  link: true, cam: null, cmode: "frame", pLo: 0.5, pHi: 99.5, mLo: 0, mHi: 1, gamma: 1,
+  cmap: "gray", invert: false, smooth: true, scalebar: true, hpA: 0, lpA: 0, arrivals: [],
+};
+const panels = new Map();                         // channel name (or "fft") → Panel
+
+// ── half floats ──────────────────────────────────────────────────────────────
+const HALF = (() => {
+  const t = new Float32Array(65536);
+  for (let h = 0; h < 65536; h++) {
+    const s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 31, m = h & 1023;
+    t[h] = e === 0 ? s * 2 ** -14 * (m / 1024) : e === 31 ? (m ? NaN : s * Infinity)
+         : s * 2 ** (e - 15) * (1 + m / 1024);
+  }
+  return t;
+})();
+
+// ── WebGL ────────────────────────────────────────────────────────────────────
+const VS = `#version 300 es
+in vec2 a; uniform vec4 u_rect; out vec2 v_uv;
+void main() { v_uv = a; gl_Position = vec4(mix(u_rect.xy, u_rect.zw, a), 0.0, 1.0); }`;
+const FS = `#version 300 es
+precision highp float;
+in vec2 v_uv; uniform sampler2D u_tex; uniform sampler2D u_lut;
+uniform float u_lo; uniform float u_hi; uniform float u_gamma; uniform bool u_inv; out vec4 o;
+void main() {
+  float v = texture(u_tex, v_uv).r;
+  float t = clamp((v - u_lo) / max(u_hi - u_lo, 1e-20), 0.0, 1.0);
+  t = pow(t, u_gamma);
+  if (u_inv) t = 1.0 - t;
+  o = vec4(texture(u_lut, vec2(t * 255.0 / 256.0 + 0.5 / 256.0, 0.5)).rgb, 1.0);
+}`;
+
+function lutBytes(name) {
+  const hex = COLORMAPS[name], out = new Uint8Array(256 * 4);
+  for (let i = 0; i < 256; i++) {
+    for (let c = 0; c < 3; c++) out[4 * i + c] = parseInt(hex.substr(6 * i + 2 * c, 2), 16);
+    out[4 * i + 3] = 255;
+  }
+  return out;
+}
+
+class Panel {
+  constructor(name, kind) {
+    this.name = name; this.kind = kind;            // kind: "image" | "fft"
+    this.el = document.createElement("div");
+    this.el.className = "panel";
+    this.el.innerHTML = `<header><span class="title"></span><span class="info mono"></span></header>
+      <div class="stage"><canvas></canvas><div class="scalebar"></div></div>`;
+    this.el.querySelector(".title").textContent = kind === "fft" ? `FFT · ${name}` : name;
+    $("panels").appendChild(this.el);
+    this.stage = this.el.querySelector(".stage");
+    this.canvas = this.el.querySelector("canvas");
+    this.bar = this.el.querySelector(".scalebar");
+    this.info = this.el.querySelector(".info");
+    const gl = this.gl = this.canvas.getContext("webgl2", {preserveDrawingBuffer: true, antialias: false});
+    if (!gl) { this.stage.textContent = "WebGL2 is not available in this browser"; return; }
+    const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+    const p = this.prog = gl.createProgram();
+    gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS));
+    gl.linkProgram(p);
+    this.u = {};
+    for (const n of ["u_rect", "u_tex", "u_lut", "u_lo", "u_hi", "u_gamma", "u_inv"]) this.u[n] = gl.getUniformLocation(p, n);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(p, "a");
+    gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    this.tex = gl.createTexture(); this.lut = gl.createTexture();
+    this.setLut(kind === "fft" ? "inferno" : S.cmap);
+    this.t = null;            // what the texture holds: {key, seq, region:[y0,x0,h,w], f, shape:[h,w], off, scale, data, sorted}
+    this.busy = false; this.again = false; this.cam = null;
+    this.bindEvents();
+    new ResizeObserver(() => this.resize()).observe(this.stage);
+  }
+  setLut(name) {
+    const gl = this.gl; if (!gl) return;
+    gl.bindTexture(gl.TEXTURE_2D, this.lut);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, lutBytes(name));
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR],
+                          [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]])
+      gl.texParameteri(gl.TEXTURE_2D, k, v);
+  }
+  size() { return {cw: this.stage.clientWidth, ch: this.stage.clientHeight}; }
+  resize() {
+    const dpr = devicePixelRatio || 1, {cw, ch} = this.size();
+    this.canvas.width = Math.max(1, Math.round(cw * dpr)); this.canvas.height = Math.max(1, Math.round(ch * dpr));
+    if (this.kind === "image" && !S.cam && S.shown) fitAll();
+    if (this.kind === "fft" && this.t && !this.cam) this.cam = fitCam(this.t.shape[0], this.t.shape[1], cw, ch);
+    this.draw(); schedule();
+  }
+  camera() { return this.kind === "fft" ? this.cam : (S.link ? S.cam : (this.cam || S.cam)); }
+  setCamera(c) { if (this.kind === "fft" || !S.link) this.cam = c; else S.cam = c; }
+  imageShape() { return this.kind === "fft" ? (this.t ? this.t.shape : null) : (S.shown ? S.shown.shape : null); }
+  toImage(px, py) {                     // CSS px in the stage → image px
+    const c = this.camera(), {cw, ch} = this.size();
+    return [(px - cw / 2) / c.zoom + c.cx, (py - ch / 2) / c.zoom + c.cy];
+  }
+  visible() {                           // [x0, x1, y0, y1] in image px
+    const c = this.camera(), {cw, ch} = this.size();
+    return [c.cx - cw / 2 / c.zoom, c.cx + cw / 2 / c.zoom, c.cy - ch / 2 / c.zoom, c.cy + ch / 2 / c.zoom];
+  }
+  limits() {                            // display limits in data units
+    const t = this.t;
+    if (this.kind === "fft") return t ? sortedPct(t.sorted, 30, 99.95) : [0, 1];
+    if (S.cmode === "manual") return [S.mLo, S.mHi];
+    const k = S.shown ? S.shown.names.indexOf(this.name) : -1;
+    if (S.cmode === "view" || S.hpA > 0 || S.lpA > 0 || k < 0 || (t && t.seq !== S.shown.seq))
+      return t ? sortedPct(t.sorted, S.pLo, S.pHi) : [0, 1];
+    return [histPct(S.shown.stats[k], S.pLo), histPct(S.shown.stats[k], S.pHi)];
+  }
+  draw() {
+    const gl = this.gl; if (!gl) return;
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    gl.clearColor(0.05, 0.055, 0.065, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+    const t = this.t, c = this.camera();
+    if (!t || !c) { this.bar.innerHTML = ""; return; }
+    const {cw, ch} = this.size(), [y0, x0, h, w] = t.region;
+    const X = (x) => ((x - c.cx) * c.zoom + cw / 2) / cw * 2 - 1, Y = (y) => 1 - ((y - c.cy) * c.zoom + ch / 2) / ch * 2;
+    const [lo, hi] = this.limits();
+    gl.useProgram(this.prog);
+    gl.uniform4f(this.u.u_rect, X(x0), Y(y0), X(x0 + w), Y(y0 + h));
+    gl.uniform1f(this.u.u_lo, (lo - t.off) / t.scale); gl.uniform1f(this.u.u_hi, (hi - t.off) / t.scale);
+    gl.uniform1f(this.u.u_gamma, this.kind === "fft" ? 1 : S.gamma);
+    gl.uniform1i(this.u.u_inv, this.kind === "image" && S.invert ? 1 : 0);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    const filt = (S.smooth || c.zoom * (devicePixelRatio || 1) / t.f < 1) ? gl.LINEAR : gl.NEAREST;
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filt);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.uniform1i(this.u.u_tex, 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.lut); gl.uniform1i(this.u.u_lut, 1);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    this.drawScalebar(c, cw);
+  }
+  drawScalebar(c, cw) {
+    const samp = S.shown && S.shown.meta && S.shown.meta.sampling_A;
+    if (!S.scalebar || this.kind !== "image" || !samp) { this.bar.innerHTML = ""; return; }
+    const perPx = samp[1] / c.zoom;                        // Å per CSS px
+    const target = 0.2 * cw * perPx, p10 = 10 ** Math.floor(Math.log10(target));
+    const nice = [1, 2, 5, 10].map((m) => m * p10).filter((v) => v <= target).pop() || p10;
+    const label = nice >= 10 ? `${+(nice / 10).toPrecision(3)} nm` : `${+nice.toPrecision(3)} Å`;
+    this.bar.innerHTML = `<div style="width:${(nice / perPx).toFixed(1)}px"></div>${label}`;
+  }
+  upload(buf, hdr, key) {
+    const gl = this.gl, [h, w] = hdr.shape, u16 = new Uint16Array(buf);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, w, h, 0, gl.RED, gl.HALF_FLOAT, u16);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const data = new Float32Array(u16.length);
+    for (let i = 0; i < u16.length; i++) data[i] = HALF[u16[i]] * hdr.scale + hdr.off;
+    const step = Math.max(1, Math.floor(data.length / 65536)), sample = [];
+    for (let i = 0; i < data.length; i += step) if (Number.isFinite(data[i])) sample.push(data[i]);
+    sample.sort((a, b) => a - b);
+    this.t = {key, seq: hdr.seq, region: hdr.region, f: hdr.f, shape: hdr.shape, off: hdr.off, scale: hdr.scale,
+              data, sorted: sample};
+  }
+  valueAt(ix, iy) {
+    const t = this.t; if (!t) return null;
+    const [y0, x0, h, w] = t.region, col = Math.floor((ix - x0) / t.f), row = Math.floor((iy - y0) / t.f);
+    if (col < 0 || row < 0 || col >= t.shape[1] || row >= t.shape[0]) return null;
+    return t.data[row * t.shape[1] + col];
+  }
+  bindEvents() {
+    const st = this.stage; let drag = null;
+    st.addEventListener("wheel", (e) => {
+      e.preventDefault(); const c = this.camera(); if (!c) return;
+      const r = st.getBoundingClientRect(), [ix, iy] = this.toImage(e.clientX - r.left, e.clientY - r.top);
+      const k = Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.0015)), z = c.zoom * k;
+      this.setCamera({zoom: z, cx: ix - (ix - c.cx) * c.zoom / z, cy: iy - (iy - c.cy) * c.zoom / z});
+      redraw(); schedule();
+    }, {passive: false});
+    st.addEventListener("mousedown", (e) => { const c = this.camera(); if (c) drag = {x: e.clientX, y: e.clientY, c}; });
+    window.addEventListener("mouseup", () => { drag = null; });
+    window.addEventListener("mousemove", (e) => {
+      if (!drag) return;
+      const c = drag.c;
+      this.setCamera({zoom: c.zoom, cx: c.cx - (e.clientX - drag.x) / c.zoom, cy: c.cy - (e.clientY - drag.y) / c.zoom});
+      redraw(); schedule();
+    });
+    st.addEventListener("dblclick", () => {
+      if (this.kind === "fft") { const {cw, ch} = this.size(); this.cam = this.t ? fitCam(...this.t.shape, cw, ch) : null; }
+      else fitAll();
+      redraw(); schedule();
+    });
+    st.addEventListener("mousemove", (e) => this.readout(e));
+    st.addEventListener("mouseleave", () => { $("cursor").textContent = "–"; this.info.textContent = ""; });
+  }
+  readout(e) {
+    if (!this.camera() || !this.t) return;
+    const r = this.stage.getBoundingClientRect(), [ix, iy] = this.toImage(e.clientX - r.left, e.clientY - r.top);
+    const v = this.valueAt(ix, iy), samp = S.shown && S.shown.meta && S.shown.meta.sampling_A;
+    let text;
+    if (this.kind === "fft") {
+      const n = this.t.shape[0], du = ix - n / 2, dv = iy - n / 2;
+      if (samp) {
+        const q = Math.hypot(du / (n * samp[1]), dv / (n * samp[0]));
+        text = `q ${q.toFixed(4)} 1/Å · d ${q > 0 ? (1 / q).toFixed(3) : "∞"} Å`;
+      } else text = `q ${(Math.hypot(du, dv) / n).toFixed(4)} 1/px`;
+    } else {
+      text = `x ${ix.toFixed(1)}, y ${iy.toFixed(1)} px` +
+        (samp ? ` (${(ix * samp[1] / 10).toFixed(2)}, ${(iy * samp[0] / 10).toFixed(2)} nm)` : "");
+    }
+    if (v !== null) text += ` · ${this.kind === "fft" ? "log₁₀P" : "value"} ${fmt(v)}`;
+    this.info.textContent = text; $("cursor").textContent = `${this.name}: ${text}`;
+  }
+  remove() { this.el.remove(); const ext = this.gl && this.gl.getExtension("WEBGL_lose_context"); if (ext) ext.loseContext(); }
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+const fmt = (v) => (Math.abs(v) >= 1e4 || (Math.abs(v) < 1e-2 && v !== 0)) ? v.toExponential(3) : v.toPrecision(4);
+function fitCam(H, W, cw, ch) { const z = Math.min(cw / W, ch / H) || 1; return {zoom: z, cx: W / 2, cy: H / 2}; }
+function sortedPct(s, lo, hi) {
+  if (!s || !s.length) return [0, 1];
+  const at = (p) => s[Math.min(s.length - 1, Math.max(0, Math.round(p / 100 * (s.length - 1))))];
+  let a = at(lo), b = at(hi); if (!(b > a)) { a -= 0.5; b = a + 1; } return [a, b];
+}
+function histPct(st, p) {                         // percentile from the server's histogram (p0.05 … p99.95)
+  const pct = st.pct, keys = Object.keys(pct).map(Number).sort((a, b) => a - b);
+  if (p <= keys[0]) return pct[`${keys[0]}`]; if (p >= keys[keys.length - 1]) return pct[`${keys[keys.length - 1]}`];
+  const hist = st.hist, total = hist.reduce((a, b) => a + b, 0), [lo, hi] = st.hist_range;
+  const target = (p - keys[0]) / (keys[keys.length - 1] - keys[0]) * total;
+  let acc = 0;
+  for (let i = 0; i < hist.length; i++) {
+    if (acc + hist[i] >= target) return lo + (hi - lo) * (i + (hist[i] ? (target - acc) / hist[i] : 0)) / hist.length;
+    acc += hist[i];
+  }
+  return hi;
+}
+function sampling() { const s = S.shown && S.shown.meta && S.shown.meta.sampling_A; return s ? s[1] : null; }
+
+// ── panels, cameras, fetching ────────────────────────────────────────────────
+function imagePanels() { return [...panels.values()].filter((p) => p.kind === "image"); }
+function fitAll() {
+  const ref = imagePanels()[0]; if (!ref || !S.shown) return;
+  const {cw, ch} = ref.size(), [H, W] = S.shown.shape;
+  S.cam = fitCam(H, W, cw, ch); for (const p of imagePanels()) p.cam = null;
+}
+function oneToOne() {
+  const c = S.cam || (imagePanels()[0] && imagePanels()[0].camera()); if (!c) return;
+  S.cam = {...c, zoom: 1 / (devicePixelRatio || 1)}; for (const p of imagePanels()) p.cam = null;
+}
+function layout() {
+  const want = [], st = S.shown;
+  if (st) for (const n of st.names) if (S.visible[n]) want.push([n, "image"]);
+  if (st && S.fft && S.fftCh && st.names.includes(S.fftCh)) want.push(["fft", "fft"]);
+  for (const [k, p] of panels) if (!want.some(([n]) => n === k) || (k === "fft" && p.name !== S.fftCh)) { p.remove(); panels.delete(k); }
+  for (const [n, kind] of want) if (!panels.has(n)) panels.set(n, new Panel(kind === "fft" ? S.fftCh : n, kind));
+  // keep the order of the channels, the FFT last
+  for (const [n] of want) $("panels").appendChild(panels.get(n).el);
+  const k = want.length, cols = k <= 3 ? Math.max(k, 1) : Math.ceil(Math.sqrt(k));
+  $("panels").style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+  $("panels").style.gridTemplateRows = `repeat(${Math.ceil(k / cols) || 1}, minmax(0, 1fr))`;
+  $("empty").style.display = k ? "none" : "flex";
+}
+function redraw() { for (const p of panels.values()) p.draw(); drawHist(); }
+let timer = null;
+function schedule() { clearTimeout(timer); timer = setTimeout(() => { for (const p of panels.values()) ensure(p); }, 60); }
+
+function ensure(p) {
+  const st = S.shown; if (!st || !p.gl) return;
+  if (p.kind === "fft") return ensureFft(p);
+  const c = p.camera(); if (!c) return;
+  const [H, W] = st.shape, dpr = devicePixelRatio || 1, samp = sampling();
+  const hp = samp ? S.hpA / samp : S.hpA, lp = samp ? S.lpA / samp : S.lpA;
+  const key = `${st.seq}|${hp}|${lp}`;
+  let [x0, x1, y0, y1] = p.visible();
+  const need = Math.max(1, Math.floor(1 / (c.zoom * dpr)));        // image px per device px
+  const t = p.t;
+  if (t && t.key === key && t.f <= need) {
+    const [ry, rx, rh, rw] = t.region;
+    if (rx <= Math.max(0, x0) && ry <= Math.max(0, y0) && rx + rw >= Math.min(W, x1) && ry + rh >= Math.min(H, y1)) return;
+  }
+  const mx = 0.25 * (x1 - x0), my = 0.25 * (y1 - y0);
+  x0 = Math.max(0, Math.floor(x0 - mx)); y0 = Math.max(0, Math.floor(y0 - my));
+  x1 = Math.min(W, Math.ceil(x1 + mx)); y1 = Math.min(H, Math.ceil(y1 + my));
+  if (x1 <= x0 || y1 <= y0) return;
+  const ow = Math.max(1, Math.ceil((x1 - x0) / need)), oh = Math.max(1, Math.ceil((y1 - y0) / need));
+  fetchInto(p, `view?seq=${st.seq}&ch=${encodeURIComponent(p.name)}&y0=${y0}&x0=${x0}&h=${y1 - y0}&w=${x1 - x0}` +
+               `&oh=${oh}&ow=${ow}&hp=${hp.toFixed(3)}&lp=${lp.toFixed(3)}`, key);
+}
+let fftLast = 0;
+function ensureFft(p) {
+  const st = S.shown, ref = panels.get(S.fftCh) || imagePanels()[0]; if (!st) return;
+  let region = [0, 0, st.shape[0], st.shape[1]];
+  if (ref && ref.camera()) {
+    const [x0, x1, y0, y1] = ref.visible();
+    const X0 = Math.max(0, Math.floor(x0)), Y0 = Math.max(0, Math.floor(y0));
+    region = [Y0, X0, Math.min(st.shape[0], Math.ceil(y1)) - Y0, Math.min(st.shape[1], Math.ceil(x1)) - X0];
+  }
+  const key = `${st.seq}|${region.join(",")}|${S.fftN}`;
+  if (p.t && p.t.key === key) return;
+  const wait = 400 - (performance.now() - fftLast);               // at most ~2.5 per second
+  if (wait > 0) { setTimeout(() => ensure(p), wait); return; }
+  fftLast = performance.now();
+  fetchInto(p, `fft?seq=${st.seq}&ch=${encodeURIComponent(S.fftCh)}&y0=${region[0]}&x0=${region[1]}` +
+               `&h=${region[2]}&w=${region[3]}&n=${S.fftN}`, key);
+}
+async function fetchInto(p, url, key) {
+  if (p.busy) { p.again = true; return; }
+  p.busy = true;
+  let ok = false;
+  try {
+    const r = await fetch(url);
+    if (r.ok) {
+      const H = (n) => r.headers.get(n);
+      const hdr = {seq: +H("X-Seq"), shape: H("X-Shape").split(",").map(Number), region: H("X-Region").split(",").map(Number),
+                   f: +(H("X-Factor") || 1), off: +H("X-Offset"), scale: +H("X-Scale")};
+      if (p.kind === "fft") { hdr.source = hdr.region; hdr.region = [0, 0, hdr.shape[0], hdr.shape[1]]; }
+      const fresh = p.kind === "fft" && (!p.t || p.t.shape[0] !== hdr.shape[0]);
+      p.upload(await r.arrayBuffer(), hdr, key);
+      if (fresh) { const {cw, ch} = p.size(); p.cam = fitCam(hdr.shape[0], hdr.shape[1], cw, ch); }
+      p.draw(); if (p === firstPanel()) drawHist();
+      ok = true;
+    } else if (r.status === 404 && S.latest && !S.paused) { S.shown = S.latest; ok = true; }   // fell out of the history
+  } catch (err) { console.warn(err); }
+  p.busy = false;
+  if (p.again || ok) { p.again = false; ensure(p); }      // the view may have moved, or a newer snapshot arrived
+}
+function firstPanel() { return imagePanels()[0]; }
+
+// ── the stream ───────────────────────────────────────────────────────────────
+function show(st) {
+  const first = !S.shown, reshaped = S.shown && (S.shown.shape[0] !== st.shape[0] || S.shown.shape[1] !== st.shape[1]);
+  S.shown = st;
+  for (const n of st.names) if (!(n in S.visible)) S.visible[n] = !S.onlyListed && n !== "coverage";
+  if (!S.fftCh || !st.names.includes(S.fftCh)) S.fftCh = st.names.includes("phase_flipped") ? "phase_flipped" : st.names[0];
+  buildChannelUI(st);
+  layout();
+  if (first || reshaped || !S.cam) requestAnimationFrame(() => {
+    fitAll(); if (first && URLP.get("view") === "1to1") oneToOne(); redraw(); schedule(); });
+  updateMeta();
+  redraw(); schedule();
+}
+function updateMeta() {
+  const st = S.shown; if (!st) return;
+  const m = st.meta || {}, bits = [];
+  if ("frames" in m) bits.push(`${m.frames.toLocaleString()} frames`);
+  if ("pass" in m && (m.accumulate === "latest" || m.accumulate === "all" || m.pass > 0)) bits.push(`pass ${m.pass + 1} at ${Math.round(100 * m.progress)}% (${m.accumulate})`);
+  else if ("coverage" in m) bits.push(`${Math.round(100 * m.coverage)}% scanned`);
+  if ("C10" in m) bits.push(`C10 ${(+m.C10).toPrecision(4)} Å`);
+  if ("rotation_deg" in m) bits.push(`rot ${(+m.rotation_deg).toPrecision(3)}°`);
+  if ("upsampling" in m) bits.push(`×${m.upsampling}`);
+  bits.push(`${st.shape[0]}×${st.shape[1]}`);
+  if (m.subtract_frame_mean) bits.push("frame mean subtracted");
+  if (st.final) bits.push("final");
+  $("metaline").textContent = bits.join(" · ");
+  const prog = "progress" in m ? m.progress : ("coverage" in m ? m.coverage : 0);
+  $("progress").firstElementChild.style.width = `${(100 * prog).toFixed(1)}%`;
+  const hist = S.latest ? S.latest.history : [];
+  $("scrub").max = Math.max(0, hist.length - 1);
+  $("scrub").value = S.paused && hist.includes(st.seq) ? hist.indexOf(st.seq) : $("scrub").max;
+  $("histlabel").textContent = `showing #${st.seq}${S.paused ? " (paused)" : ""} · ${hist.length} kept, ${S.latest ? S.latest.count : 0} received`;
+  const u = sampling(); $("hp_o").textContent = u ? `${S.hpA} Å` : `${S.hpA} px`; $("lp_o").textContent = u ? `${S.lpA} Å` : `${S.lpA} px`;
+}
+function onState(st) {
+  if (st.seq < 0) return;
+  S.latest = st;
+  const now = performance.now(); S.arrivals.push(now); while (S.arrivals.length > 1 && now - S.arrivals[0] > 5000) S.arrivals.shift();
+  const rate = S.arrivals.length > 1 ? (S.arrivals.length - 1) / ((now - S.arrivals[0]) / 1000) : 0;
+  $("rate").textContent = `${rate.toFixed(1)} /s`;
+  $("endpoint").textContent = st.endpoint || "";
+  if (!S.paused) show(st); else updateMeta();
+}
+// URL parameters preset the controls (e.g. ?cmap=inferno&fft=1&hp=20&view=1to1); ?snapshot[=seq]
+// shows one snapshot without the live stream (for screenshots and for links to a moment)
+const URLP = new URLSearchParams(location.search);
+function applyParams() {
+  const set = (id, v, ev = "change") => { const el = $(id); if (el.type === "checkbox") el.checked = v === "1" || v === "true";
+    else el.value = v; el.dispatchEvent(new Event(ev)); };
+  for (const [k, id, ev] of [["cmap", "cmap"], ["cmode", "cmode"], ["fftn", "fftn"], ["invert", "invert"], ["link", "link"],
+                             ["smooth", "smooth"], ["scalebar", "scalebar"], ["gamma", "gamma", "input"], ["hp", "hp", "input"],
+                             ["lp", "lp", "input"], ["plo", "plo", "input"], ["phi", "phi", "input"]])
+    if (URLP.has(k)) set(id, URLP.get(k), ev || "change");
+  if (URLP.has("fftch")) S.fftCh = URLP.get("fftch");
+  if (URLP.has("fft")) set("fft", URLP.get("fft"));
+  if (URLP.has("channels")) { const want = URLP.get("channels").split(","); S.visible = {};
+    for (const n of want) S.visible[n] = true; S.onlyListed = true; }
+}
+function connect() {
+  if (URLP.has("snapshot")) {
+    const seq = URLP.get("snapshot");
+    fetch(seq ? `state?seq=${seq}` : "state").then((r) => r.json()).then((st) => { S.paused = true; S.latest = st; show(st); })
+      .catch(() => {});
+    $("dot").style.background = "var(--muted)";
+    return;
+  }
+  fetch("state").then((r) => r.json()).then(onState).catch(() => {});
+  const es = new EventSource("events");
+  es.onopen = () => { $("dot").style.background = "var(--ok)"; };
+  es.onerror = () => { $("dot").style.background = "var(--bad)"; };
+  es.onmessage = (e) => onState(JSON.parse(e.data));
+}
+
+// ── sidebar ──────────────────────────────────────────────────────────────────
+function buildChannelUI(st) {
+  const box = $("channels"), have = [...box.querySelectorAll("input")].map((i) => i.value);
+  if (have.join("|") === st.names.join("|")) return;
+  box.innerHTML = ""; $("fftch").innerHTML = "";
+  for (const n of st.names) {
+    const l = document.createElement("label");
+    l.innerHTML = `<input type="checkbox" value="${n}"> ${n}`;
+    const cb = l.querySelector("input"); cb.checked = !!S.visible[n];
+    cb.onchange = () => { S.visible[n] = cb.checked; layout(); redraw(); schedule(); };
+    box.appendChild(l);
+    const o = document.createElement("option"); o.value = o.textContent = n; $("fftch").appendChild(o);
+  }
+  $("fftch").value = S.fftCh;
+}
+function drawHist() {
+  const cv = $("hist"), p = firstPanel(), st = S.shown;
+  const dpr = devicePixelRatio || 1; cv.width = cv.clientWidth * dpr; cv.height = cv.clientHeight * dpr;
+  const g = cv.getContext("2d"); g.clearRect(0, 0, cv.width, cv.height);
+  if (!p || !st) return;
+  const k = st.names.indexOf(p.name); if (k < 0) return;
+  const s = st.stats[k], h = s.hist, [lo, hi] = s.hist_range, top = Math.max(...h.map((v) => Math.log1p(v)));
+  g.fillStyle = "#6b7684";
+  for (let i = 0; i < h.length; i++) {
+    const y = Math.log1p(h[i]) / top * cv.height;
+    g.fillRect(i / h.length * cv.width, cv.height - y, Math.ceil(cv.width / h.length), y);
+  }
+  const [a, b] = p.limits(), X = (v) => (v - lo) / (hi - lo) * cv.width;
+  g.fillStyle = "#4fa3ff"; g.fillRect(X(a) - dpr, 0, 2 * dpr, cv.height); g.fillRect(X(b) - dpr, 0, 2 * dpr, cv.height);
+  if (S.cmode !== "manual") { $("mlo").value = +a.toPrecision(5); $("mhi").value = +b.toPrecision(5); }
+}
+function bind() {
+  const on = (id, ev, f) => $(id).addEventListener(ev, f);
+  const setOut = () => { $("plo_o").textContent = `${S.pLo}`; $("phi_o").textContent = `${S.pHi}`; $("gamma_o").textContent = `${S.gamma}`; };
+  for (const n of Object.keys(COLORMAPS)) { const o = document.createElement("option"); o.value = o.textContent = n; $("cmap").appendChild(o); }
+  on("plo", "input", (e) => { S.pLo = +e.target.value; setOut(); redraw(); });
+  on("phi", "input", (e) => { S.pHi = +e.target.value; setOut(); redraw(); });
+  on("gamma", "input", (e) => { S.gamma = +e.target.value; setOut(); redraw(); });
+  on("cmode", "change", (e) => { S.cmode = e.target.value; redraw(); });
+  for (const id of ["mlo", "mhi"]) on(id, "input", () => { S.cmode = "manual"; $("cmode").value = "manual"; S.mLo = +$("mlo").value; S.mHi = +$("mhi").value; redraw(); });
+  on("cmap", "change", (e) => { S.cmap = e.target.value; for (const p of panels.values()) if (p.kind === "image") p.setLut(S.cmap); redraw(); });
+  on("invert", "change", (e) => { S.invert = e.target.checked; redraw(); });
+  on("smooth", "change", (e) => { S.smooth = e.target.checked; redraw(); });
+  on("scalebar", "change", (e) => { S.scalebar = e.target.checked; redraw(); });
+  on("link", "change", (e) => { const c = imagePanels()[0] && imagePanels()[0].camera(); S.link = e.target.checked;
+    for (const p of imagePanels()) p.cam = S.link ? null : {...c}; if (S.link) S.cam = c; redraw(); schedule(); });
+  on("fit", "click", () => { fitAll(); redraw(); schedule(); });
+  on("one", "click", () => { oneToOne(); redraw(); schedule(); });
+  on("fft", "change", (e) => { S.fft = e.target.checked; layout(); redraw(); schedule(); });
+  on("fftch", "change", (e) => { S.fftCh = e.target.value; layout(); schedule(); });
+  on("fftn", "change", (e) => { S.fftN = +e.target.value; schedule(); });
+  on("hp", "input", (e) => { S.hpA = +e.target.value; updateMeta(); schedule(); });
+  on("lp", "input", (e) => { S.lpA = +e.target.value; updateMeta(); schedule(); });
+  on("pause", "change", (e) => { S.paused = e.target.checked; if (!S.paused && S.latest) show(S.latest); else updateMeta(); });
+  on("live", "click", () => { S.paused = false; $("pause").checked = false; if (S.latest) show(S.latest); });
+  on("scrub", "input", (e) => {
+    const hist = S.latest ? S.latest.history : []; const seq = hist[+e.target.value]; if (seq === undefined) return;
+    S.paused = true; $("pause").checked = true;
+    fetch(`state?seq=${seq}`).then((r) => r.json()).then((st) => { if (st.seq >= 0) show(st); });
+  });
+  on("png", "click", () => {
+    for (const p of panels.values()) {
+      p.draw();
+      p.canvas.toBlob((b) => { const a = document.createElement("a"); a.href = URL.createObjectURL(b);
+        a.download = `snapshot${S.shown.seq}_${p.kind === "fft" ? "fft_" : ""}${p.name}.png`; a.click(); });
+    }
+  });
+  on("npy", "click", () => { for (const p of imagePanels()) { const a = document.createElement("a");
+    a.href = `npy?seq=${S.shown.seq}&ch=${encodeURIComponent(p.name)}`; a.click(); } });
+  window.addEventListener("keydown", (e) => {
+    if (e.target.tagName === "INPUT" && e.target.type === "number") return;
+    if (e.key === " ") { e.preventDefault(); $("pause").click(); }
+    if (e.key === "f") { fitAll(); redraw(); schedule(); }
+    if (e.key === "1") { oneToOne(); redraw(); schedule(); }
+  });
+  setOut();
+}
+bind();
+applyParams();
+connect();
+</script>
+</body>
+</html>

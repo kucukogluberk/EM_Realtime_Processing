@@ -6,6 +6,19 @@ docker/Dockerfile .`, so the versions can be switched back and forth.
 
 ## Unreleased
 
+**Browser viewer: `python -m realtime_stem.streaming.web tcp://<host>:5601`.** A page on localhost
+replaces the matplotlib window as the recommended viewer.
+
+- **Smooth at large sizes.** The page asks only for the region it shows, at the size it shows it,
+  so a 4096² snapshot is as smooth as a 512² one. Contrast, gamma and the colour map are applied
+  on the GPU (WebGL2).
+- **Controls:** linked panels per channel, auto (frame or view) or manual limits with a histogram,
+  high- and low-pass filters in Å, a Fourier transform of the visible region with d-spacings, a
+  scale bar, pause and a history slider, PNG and `.npy` export, and URL presets.
+- **Dependencies:** the standard library, numpy and pyzmq; the page loads nothing from the
+  internet. `examples/viewer.py` and the notebook view are unchanged.
+- **Snapshot metadata:** it now carries `sampling_A`, the output pixel size.
+
 **Calibration from a recording: `tools/calibrate_parallax.py`.** It takes one recorded scan (a
 `.dstream` or `.npy`) and the acquisition values, and measures the parallax geometry.
 

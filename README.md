@@ -78,11 +78,14 @@ docker run --rm --network host --gpus "device=<N>" --ulimit stack=33554432:33554
     --live-endpoint tcp://127.0.0.1:5601 --continuous --out-dir /out
 ```
 
-Watch it in a second terminal:
+Watch it in a browser: start the viewer in a second terminal and open http://127.0.0.1:8050.
 
 ```bash
-python examples/viewer.py tcp://127.0.0.1:5601
+python -m realtime_stem.streaming.web tcp://127.0.0.1:5601
 ```
+
+It sends the browser only what is on screen, so large or upsampled images (e.g. 4096²) stay
+smooth. The matplotlib window `python examples/viewer.py tcp://127.0.0.1:5601` still works.
 
 Then arm the detector, scan, and disarm, with your usual software or with
 `python -m tools.detector_setup arm` / `disarm --ip <DCU_IP>`.

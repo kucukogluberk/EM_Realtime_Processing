@@ -1,0 +1,402 @@
+"""Browser viewer for the live stream: a small HTTP server that subscribes to a `run.py
+--live-endpoint` PUB and serves a WebGL page (`static/index.html`) showing the newest snapshot.
+
+    python -m realtime_stem.streaming.web tcp://127.0.0.1:5601        # then open http://127.0.0.1:8050
+    ssh -L 8050:127.0.0.1:8050 <server>                              # to watch from another computer
+
+Only what is on screen crosses the wire. The page asks for the region it shows at the size it
+shows it (`/view`): the server averages blocks of pixels down to about the screen's resolution,
+and sends native pixels once zoomed in. So a 4096² snapshot costs the browser about what a 512²
+one does. Contrast, gamma and the colour map are applied on the GPU in the browser, so the
+sliders don't wait for the server. Python's standard library, numpy and pyzmq only. The page loads
+nothing from the internet, since microscope computers are often offline.
+
+Endpoints (all GET):
+    /                the page;  /static/<file>  its scripts
+    /events          Server-Sent Events: the state (below) of each new snapshot
+    /state           the state of the newest snapshot (or ?seq=), as JSON
+    /view            ?seq&ch&y0&x0&h&w&oh&ow[&hp&lp]: a region, block-averaged by the largest
+                     integer that keeps it at least oh × ow, optionally Gaussian high/low-passed
+                     (sigmas in full-resolution pixels), as float16 normalized by X-Offset/X-Scale
+    /fft             ?seq&ch&y0&x0&h&w[&n]: log10 power spectrum of the central n × n (≤ 1024)
+                     native pixels of a region, Hann-windowed, float16 like /view
+    /npy             ?seq&ch: one channel at full resolution, as .npy
+"""
+
+from __future__ import annotations
+
+import argparse
+import io
+import json
+import math
+import threading
+import time
+import webbrowser
+from collections import deque
+from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
+
+import numpy as np
+
+STATIC = Path(__file__).resolve().parent / "static"
+_PCT = (0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 95.0, 98.0, 99.0, 99.5, 99.9, 99.95)
+
+
+# ── the snapshots ──────────────────────────────────────────────────────────────
+
+def channel_stats(img: np.ndarray, samples: int = 1 << 20, bins: int = 256) -> dict:
+    """Percentiles and a histogram of one channel, from a strided sample of at most `samples`
+    pixels (enough for display limits, cheap at 4096²)."""
+    step = max(1, int(math.sqrt(img.size / samples)))
+    s = img[::step, ::step]
+    s = s[np.isfinite(s)]
+    if s.size == 0:
+        return {"min": 0.0, "max": 0.0, "mean": 0.0, "std": 0.0, "pct": {}, "hist": [],
+                "hist_range": [0.0, 1.0]}
+    pct = np.percentile(s, _PCT)
+    lo, hi = float(pct[0]), float(pct[-1])
+    if not hi > lo:
+        lo, hi = lo - 0.5, lo + 0.5
+    hist, _ = np.histogram(s, bins=bins, range=(lo, hi))
+    return {"min": float(s.min()), "max": float(s.max()), "mean": float(s.mean()),
+            "std": float(s.std()), "pct": {f"{p:g}": float(v) for p, v in zip(_PCT, pct)},
+            "hist": hist.tolist(), "hist_range": [lo, hi]}
+
+
+@dataclass
+class Frame:
+    seq: int
+    stack: np.ndarray          # (C, H, W) float32
+    names: list
+    header: dict
+    stats: list
+    received: float
+
+    @property
+    def nbytes(self) -> int:
+        return self.stack.nbytes
+
+
+class FrameStore:
+    """The newest snapshots, up to `history_mb` (the newest is always kept), for the page and for
+    scrubbing back. `wait` blocks until a snapshot newer than a given seq arrives."""
+
+    def __init__(self, history_mb: float = 512.0):
+        self.budget = int(history_mb * 2**20)
+        self._frames: deque[Frame] = deque()
+        self._cond = threading.Condition()
+        self._next = 0
+        self.received = 0
+
+    def put(self, arr: np.ndarray, header: dict) -> Frame:
+        names = header.get("channels")
+        stack = np.asarray(arr, dtype=np.float32)
+        if not names:
+            stack = stack[None] if stack.ndim == 2 else stack
+            names = [f"channel {i}" for i in range(stack.shape[0])] if stack.shape[0] > 1 \
+                else ["reconstruction"]
+        frame = Frame(seq=self._next, stack=stack, names=list(names), header=header,
+                      stats=[channel_stats(c) for c in stack], received=time.time())
+        with self._cond:
+            self._frames.append(frame)
+            self._next += 1
+            self.received += 1
+            total = sum(f.nbytes for f in self._frames)
+            while len(self._frames) > 1 and total > self.budget:
+                total -= self._frames.popleft().nbytes
+            self._cond.notify_all()
+        return frame
+
+    def get(self, seq: int | None = None) -> Frame | None:
+        with self._cond:
+            if not self._frames:
+                return None
+            if seq is None:
+                return self._frames[-1]
+            for f in self._frames:
+                if f.seq == seq:
+                    return f
+            return None
+
+    def seqs(self) -> list[int]:
+        with self._cond:
+            return [f.seq for f in self._frames]
+
+    def wait(self, after: int, timeout: float) -> Frame | None:
+        """The newest snapshot if it is newer than `after`, waiting up to `timeout` s for one."""
+        with self._cond:
+            ok = self._cond.wait_for(lambda: self._frames and self._frames[-1].seq > after,
+                                     timeout)
+            return self._frames[-1] if ok else None
+
+    def state(self, frame: Frame) -> dict:
+        h = frame.header
+        return {"seq": frame.seq, "names": frame.names, "shape": list(frame.stack.shape[1:]),
+                "meta": h.get("meta") or {}, "final": bool(h.get("final")),
+                "publisher_seq": h.get("seq"), "stats": frame.stats, "received": frame.received,
+                "history": self.seqs(), "count": self.received}
+
+
+# ── the images the page asks for ───────────────────────────────────────────────
+
+def _gauss(img: np.ndarray, sigma: float, high: bool) -> np.ndarray:
+    fy = np.fft.fftfreq(img.shape[0])[:, None]
+    fx = np.fft.rfftfreq(img.shape[1])[None, :]
+    g = np.exp(-2.0 * np.pi**2 * sigma**2 * (fy**2 + fx**2))
+    if high:
+        g = 1.0 - g
+    return np.fft.irfft2(np.fft.rfft2(img) * g, s=img.shape).astype(np.float32)
+
+
+def view(img: np.ndarray, y0: int, x0: int, h: int, w: int, oh: int, ow: int,
+         hp: float = 0.0, lp: float = 0.0) -> tuple[np.ndarray, tuple[int, int, int, int], int]:
+    """A region of `img`, block-averaged by the largest integer f that keeps it at least
+    oh × ow (f = 1, native pixels, when zoomed in), optionally high-/low-passed with Gaussian
+    sigmas `hp`/`lp` in full-resolution pixels. The filters run on the averaged region plus a
+    margin of 3 sigma (so they cost what the screen does, not what the snapshot does).
+    Returns (data, (y0, x0, h, w) actually covered, f)."""
+    H, W = img.shape
+    y0, x0 = max(0, min(int(y0), H - 1)), max(0, min(int(x0), W - 1))
+    h, w = max(1, min(int(h), H - y0)), max(1, min(int(w), W - x0))
+    f = max(1, min(h // max(int(oh), 1), w // max(int(ow), 1)))
+    h, w = (h // f) * f, (w // f) * f
+    m = int(math.ceil(3 * max(hp, lp) / f)) * f if (hp or lp) else 0
+    ya, yb = max(0, y0 - m), min(H, y0 + h + m)
+    xa, xb = max(0, x0 - m), min(W, x0 + w + m)
+    # widen to whole blocks around the region (the margin may be clipped by the image edge)
+    ya, xa = y0 - ((y0 - ya) // f) * f, x0 - ((x0 - xa) // f) * f
+    yb, xb = y0 + h + ((yb - y0 - h) // f) * f, x0 + w + ((xb - x0 - w) // f) * f
+    sub = img[ya:yb, xa:xb].astype(np.float32, copy=False)
+    if f > 1:
+        sub = sub.reshape(sub.shape[0] // f, f, sub.shape[1] // f, f).mean(axis=(1, 3))
+    if lp > 0:
+        sub = _gauss(sub, lp / f, high=False)
+    if hp > 0:
+        sub = _gauss(sub, hp / f, high=True)
+    oy, ox = (y0 - ya) // f, (x0 - xa) // f
+    out = sub[oy:oy + h // f, ox:ox + w // f]
+    return np.ascontiguousarray(out, dtype=np.float32), (y0, x0, h, w), f
+
+
+def power_spectrum(img: np.ndarray, y0: int, x0: int, h: int, w: int,
+                   n: int = 1024) -> tuple[np.ndarray, tuple[int, int, int]]:
+    """log10 power spectrum (fftshifted, Hann-windowed) of the central n × n native pixels of a
+    region (n even, at most the region). Returns (spectrum, (y0, x0, n) of the square used)."""
+    H, W = img.shape
+    y0, x0 = max(0, min(int(y0), H - 1)), max(0, min(int(x0), W - 1))
+    h, w = max(2, min(int(h), H - y0)), max(2, min(int(w), W - x0))
+    n = max(2, (min(int(n), h, w, 4096) // 2) * 2)
+    cy, cx = y0 + (h - n) // 2, x0 + (w - n) // 2
+    sub = img[cy:cy + n, cx:cx + n].astype(np.float64)
+    win = np.hanning(n)
+    p = np.abs(np.fft.fft2((sub - sub.mean()) * np.outer(win, win))) ** 2
+    p = np.fft.fftshift(p)
+    floor = p.mean() * 1e-6 + 1e-30
+    return np.log10(p + floor).astype(np.float32), (cy, cx, n)
+
+
+def encode(data: np.ndarray) -> tuple[bytes, float, float]:
+    """float16 bytes of (data − offset) / scale, so any range keeps float16's 11 bits of
+    precision around the image's own level. Returns (bytes, offset, scale)."""
+    finite = data[np.isfinite(data)]
+    off = float(finite.mean()) if finite.size else 0.0
+    scale = float(finite.std()) if finite.size else 1.0
+    scale = scale if scale > 0 else 1.0
+    z = np.clip((data - off) / scale, -6.0e4, 6.0e4)
+    return z.astype("<f2").tobytes(), off, scale
+
+
+# ── HTTP ───────────────────────────────────────────────────────────────────────
+
+class _Handler(BaseHTTPRequestHandler):
+    store: FrameStore = None          # set by make_server
+    endpoint: str = ""
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt, *args):     # quiet: the page polls /view a lot
+        pass
+
+    # helpers
+    def _send(self, code: int, body: bytes, ctype: str, headers: dict | None = None):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        for k, v in (headers or {}).items():
+            self.send_header(k, str(v))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json(self, obj, code: int = 200):
+        self._send(code, json.dumps(obj).encode(), "application/json")
+
+    def _error(self, code: int, msg: str):
+        self._json({"error": msg}, code)
+
+    def _frame_channel(self, q):
+        frame = self.store.get(int(q["seq"][0]) if "seq" in q else None)
+        if frame is None:
+            return None, None, "no snapshot (yet, or no longer in the history)"
+        ch = q.get("ch", [frame.names[0]])[0]
+        if ch not in frame.names:
+            return None, None, f"unknown channel {ch!r}"
+        return frame, frame.stack[frame.names.index(ch)], None
+
+    @staticmethod
+    def _ints(q, *names, default=None):
+        return [int(float(q[n][0])) if n in q else default for n in names]
+
+    # routes
+    def do_GET(self):
+        url = urlsplit(self.path)
+        q = parse_qs(url.query)
+        try:
+            route = getattr(self, "_get_" + (url.path.strip("/").split("/")[0] or "index"), None)
+            if route is None:
+                return self._error(404, f"no such path {url.path}")
+            route(url, q)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except (KeyError, ValueError) as exc:
+            self._error(400, f"{type(exc).__name__}: {exc}")
+
+    def _get_index(self, url, q):
+        self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
+
+    def _get_static(self, url, q):
+        name = url.path.split("/", 2)[-1]
+        f = (STATIC / name).resolve()
+        if STATIC not in f.parents or not f.is_file():
+            return self._error(404, f"no such file {name}")
+        ctype = {".js": "text/javascript", ".css": "text/css", ".html": "text/html"}.get(
+            f.suffix, "application/octet-stream")
+        self._send(200, f.read_bytes(), ctype + "; charset=utf-8")
+
+    def _get_state(self, url, q):
+        frame = self.store.get(int(q["seq"][0]) if "seq" in q else None)
+        if frame is None:
+            return self._json({"seq": -1, "endpoint": self.endpoint, "history": []})
+        self._json({**self.store.state(frame), "endpoint": self.endpoint})
+
+    def _get_events(self, url, q):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        last = int(q.get("after", ["-1"])[0])
+        while True:
+            frame = self.store.wait(last, timeout=10.0)
+            if frame is None:
+                self.wfile.write(b": keep-alive\n\n")
+            else:
+                last = frame.seq
+                body = json.dumps({**self.store.state(frame), "endpoint": self.endpoint})
+                self.wfile.write(b"data: " + body.encode() + b"\n\n")
+            self.wfile.flush()
+
+    def _get_view(self, url, q):
+        frame, img, err = self._frame_channel(q)
+        if err:
+            return self._error(404, err)
+        y0, x0, h, w, oh, ow = self._ints(q, "y0", "x0", "h", "w", "oh", "ow", default=0)
+        H, W = img.shape
+        h, w = h or H, w or W
+        hp, lp = (float(q[n][0]) if n in q else 0.0 for n in ("hp", "lp"))
+        data, (ry, rx, rh, rw), f = view(img, y0, x0, h, w, oh or h, ow or w, hp, lp)
+        body, off, scale = encode(data)
+        self._send(200, body, "application/octet-stream", {
+            "X-Seq": frame.seq, "X-Shape": f"{data.shape[0]},{data.shape[1]}",
+            "X-Region": f"{ry},{rx},{rh},{rw}", "X-Factor": f, "X-Offset": repr(off),
+            "X-Scale": repr(scale), "Access-Control-Expose-Headers": "*"})
+
+    def _get_fft(self, url, q):
+        frame, img, err = self._frame_channel(q)
+        if err:
+            return self._error(404, err)
+        H, W = img.shape
+        y0, x0, h, w, n = self._ints(q, "y0", "x0", "h", "w", "n", default=0)
+        spec, (cy, cx, n) = power_spectrum(img, y0, x0, h or H, w or W, n or 1024)
+        body, off, scale = encode(spec)
+        self._send(200, body, "application/octet-stream", {
+            "X-Seq": frame.seq, "X-Shape": f"{n},{n}", "X-Region": f"{cy},{cx},{n},{n}",
+            "X-Offset": repr(off), "X-Scale": repr(scale)})
+
+    def _get_npy(self, url, q):
+        frame, img, err = self._frame_channel(q)
+        if err:
+            return self._error(404, err)
+        buf = io.BytesIO()
+        np.save(buf, img)
+        ch = q.get("ch", [frame.names[0]])[0].replace(" ", "_")
+        self._send(200, buf.getvalue(), "application/octet-stream",
+                   {"Content-Disposition": f'attachment; filename="snapshot{frame.seq:05d}_{ch}.npy"'})
+
+
+def make_server(store: FrameStore, host: str = "127.0.0.1", port: int = 8050,
+                endpoint: str = "") -> ThreadingHTTPServer:
+    handler = type("Handler", (_Handler,), {"store": store, "endpoint": endpoint})
+    server = ThreadingHTTPServer((host, port), handler)
+    server.daemon_threads = True
+    return server
+
+
+def subscribe(endpoint: str, store: FrameStore, stop: threading.Event) -> threading.Thread:
+    """Feed `store` from the live stream (newest frame only) until `stop` is set."""
+    from realtime_stem.streaming.live_stream import LiveSubscriber
+
+    def run():
+        sub = LiveSubscriber(endpoint)
+        try:
+            while not stop.is_set():
+                msg = sub.recv_latest(timeout_ms=200)
+                if msg is not None:
+                    store.put(*msg)
+        finally:
+            sub.close()
+
+    thread = threading.Thread(target=run, name="live-subscriber", daemon=True)
+    thread.start()
+    return thread
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The command-line interface (also rendered into docs/CLI.md)."""
+    p = argparse.ArgumentParser(
+        prog="python -m realtime_stem.streaming.web",
+        description="Browser viewer for the live stream: serves a page on localhost that shows "
+                    "the newest snapshot with zoom, contrast, colour maps, filters, a Fourier "
+                    "transform and a history.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    p.add_argument("endpoint", help="tcp://host:port of the run.py --live-endpoint PUB.")
+    p.add_argument("--host", default="127.0.0.1",
+                   help="Address to serve the page on (0.0.0.0 for other computers; or keep "
+                        "127.0.0.1 and use ssh -L).")
+    p.add_argument("--port", type=int, default=8050, help="Port to serve the page on.")
+    p.add_argument("--history-mb", type=float, default=512.0, metavar="MB",
+                   help="Memory for past snapshots to scrub back through (the newest is always "
+                        "kept; 4096² × 2 channels is 128 MB each).")
+    p.add_argument("--open", action="store_true", help="Open the page in the default browser.")
+    return p
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+    store = FrameStore(args.history_mb)
+    stop = threading.Event()
+    subscribe(args.endpoint, store, stop)
+    server = make_server(store, args.host, args.port, args.endpoint)
+    url = f"http://{'127.0.0.1' if args.host in ('0.0.0.0', '') else args.host}:{server.server_port}/"
+    print(f"[web] subscribed to {args.endpoint}; open {url}", flush=True)
+    if args.open:
+        webbrowser.open(url)
+    try:
+        server.serve_forever(poll_interval=0.25)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop.set()
+        server.server_close()
+        print("[web] stopped", flush=True)

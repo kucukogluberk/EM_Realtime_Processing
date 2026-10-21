@@ -18,6 +18,7 @@ changed recently, [CHANGELOG.md](../CHANGELOG.md).
 | [`python -m tools.make_dstream`](#python--m-toolsmake_dstream) | synthetic random capture (format tests) |
 | [`python -m tools.dstream`](#python--m-toolsdstream) | inspect a capture |
 | [`python -m tools.detector_setup`](#python--m-toolsdetector_setup) | set up, arm and disarm the DCU |
+| [`python -m realtime_stem.streaming.web`](#python--m-realtime_stemstreamingweb) | browser live viewer |
 | [`python examples/viewer.py`](#python-examplesviewerpy) | desktop live viewer |
 | [`python examples/probe.py`](#python-examplesprobepy) | headless live-stream probe |
 | [`python examples/plot_result.py`](#python-examplesplot_resultpy) | plot a saved result |
@@ -359,6 +360,31 @@ usage: python -m tools.detector_setup [-h] --ip IP [--http-port HTTP_PORT] [--ap
 | `--frame-time FRAME_TIME` |  | Seconds per frame, the scan generator's dwell time (e.g. 8.334e-6 = 120 kHz). Default: leave the DCU's as it is. |
 | `--trigger-mode TRIGGER_MODE` | `exts` | exts = one external trigger per frame, from the scan generator. |
 | `--keep-filewriter` | flag | Leave the DCU's file writer as it is (default: disabled, live only). |
+
+## `python -m realtime_stem.streaming.web`
+
+Browser viewer for the live stream: a page on localhost with zoom, contrast, colour maps, filters, a Fourier transform and a history; only the visible region crosses the wire.
+
+```text
+usage: python -m realtime_stem.streaming.web [-h] [--host HOST] [--port PORT] [--history-mb MB]
+                                             [--open]
+                                             endpoint
+```
+
+**arguments**
+
+| parameter | default | description |
+|---|---|---|
+| `endpoint` | required | tcp://host:port of the run.py --live-endpoint PUB. |
+
+**general**
+
+| parameter | default | description |
+|---|---|---|
+| `--host HOST` | `127.0.0.1` | Address to serve the page on (0.0.0.0 for other computers; or keep 127.0.0.1 and use ssh -L). |
+| `--port PORT` | `8050` | Port to serve the page on. |
+| `--history-mb MB` | `512.0` | Memory for past snapshots to scrub back through (the newest is always kept; 4096² × 2 channels is 128 MB each). |
+| `--open` | flag | Open the page in the default browser. |
 
 ## `python examples/viewer.py`
 
