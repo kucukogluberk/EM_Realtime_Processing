@@ -528,6 +528,8 @@ class ParallaxAccumulator:
             "rotation_deg": (0.0 if geo.rotation_angle is None
                              else round(float(np.rad2deg(geo.rotation_angle)), 6)),
             "upsampling": self._u,
+            # output pixel size (y, x) in Å: scale bars and d-spacings in the viewers
+            "sampling_A": [float(v) for v in geo.upsampled_scan_sampling],
             "frames": self._n_frames,
             "coverage": float((self._visits > 0).float().mean()),
             "accumulate": self.accumulate,
