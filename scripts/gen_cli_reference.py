@@ -50,6 +50,12 @@ INTROS = {
                              "scans, or repeated scans whose defocus / astigmatism follow a "
                              "schedule (an operator tuning the microscope). Writes the exact "
                              "`run.py` flags to `<out>.flags`.",
+    "tools.calibrate_parallax": "Measure the parallax geometry of a recorded scan (disk centre, "
+                                "column flip, rotation, C10, C12) from the shifts of its "
+                                "virtual bright-field images, checked with the variance loss, and "
+                                "write the `run.py` flags. Departures from a quadratic aberration "
+                                "surface (C30, C21, C23) are reported as a diagnostic only: "
+                                "parallax corrects quadratic aberrations alone.",
     "tools.replay_to_zmq": "Replay a `.dstream` capture over ZMQ PUSH, as the DCU would send it.",
     "tools.record_dstream": "Record a live stream (the DCU, or a feeder) verbatim into a "
                             "`.dstream` capture. Nothing else may listen to the DCU meanwhile.",
@@ -69,6 +75,7 @@ INTROS = {
 SHORT = {
     "run": "the pipeline (reconstruct a stream, a capture or a file)",
     "tools.simulate_4dstem": "simulate parallax datasets (incl. focus-tuning sessions)",
+    "tools.calibrate_parallax": "measure centre, flip, rotation and defocus from a recording",
     "tools.replay_to_zmq": "replay a capture as a live stream",
     "tools.record_dstream": "record a live stream into a capture",
     "tools.npy_to_dstream": "convert a 4D `.npy` into a capture",
@@ -87,7 +94,8 @@ def _parsers():
     from realtime_stem.processing import registry
 
     out = [("run", run.build_parser(registry.get("parallax")))]
-    for mod in ("tools.simulate_4dstem", "tools.replay_to_zmq", "tools.record_dstream",
+    for mod in ("tools.simulate_4dstem", "tools.calibrate_parallax", "tools.replay_to_zmq",
+                "tools.record_dstream",
                 "tools.npy_to_dstream", "tools.make_dstream", "tools.dstream", "tools.detector_setup",
                 "examples.viewer", "examples.probe", "examples.plot_result"):
         out.append((mod, importlib.import_module(mod).build_parser()))

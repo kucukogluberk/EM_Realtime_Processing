@@ -11,6 +11,7 @@ changed recently, [CHANGELOG.md](../CHANGELOG.md).
 |---|---|
 | [`python -m realtime_stem.apps.run`](#python--m-realtime_stemappsrun) | the pipeline (reconstruct a stream, a capture or a file) |
 | [`python -m tools.simulate_4dstem`](#python--m-toolssimulate_4dstem) | simulate parallax datasets (incl. focus-tuning sessions) |
+| [`python -m tools.calibrate_parallax`](#python--m-toolscalibrate_parallax) | measure centre, flip, rotation and defocus from a recording |
 | [`python -m tools.replay_to_zmq`](#python--m-toolsreplay_to_zmq) | replay a capture as a live stream |
 | [`python -m tools.record_dstream`](#python--m-toolsrecord_dstream) | record a live stream into a capture |
 | [`python -m tools.npy_to_dstream`](#python--m-toolsnpy_to_dstream) | convert a 4D `.npy` into a capture |
@@ -175,6 +176,50 @@ usage: python -m tools.simulate_4dstem [-h] --out PREFIX
 | `--seed SEED` | `0` | Random seed (object and shot noise). |
 | `--device DEVICE` | `auto` | Torch device for the simulation (auto: cuda, then mps, then cpu). |
 | `--batch N` | `256` | Probe positions per simulation batch (lower it for large probes). |
+
+## `python -m tools.calibrate_parallax`
+
+Measure the parallax geometry of a recorded scan (disk centre, column flip, rotation, C10, C12) from the shifts of its virtual bright-field images, checked with the variance loss, and write the `run.py` flags. Departures from a quadratic aberration surface (C30, C21, C23) are reported as a diagnostic only: parallax corrects quadratic aberrations alone.
+
+```text
+usage: python -m tools.calibrate_parallax [-h] --scan NY NX --energy EV --semiangle MRAD
+                                          --angular-sampling MRAD_PX --scan-sampling ANG
+                                          [--rotation-prior DEG] [--group PX] [--mean-every K]
+                                          [--lowpass Q] [--tol PX]
+                                          [--max-iterations MAX_ITERATIONS] [--no-loss]
+                                          [--device DEVICE] [--out PREFIX]
+                                          recording
+```
+
+**arguments**
+
+| parameter | default | description |
+|---|---|---|
+| `recording` | required | A recorded scan: .dstream (tools/record_stream.py) or a .npy of frames (..., H, W) in raster order. |
+
+**general**
+
+| parameter | default | description |
+|---|---|---|
+| `--rotation-prior DEG` |  | Report the twin solution whose rotation is nearest this (e.g. the rotation used live). Default: the twin with \|rotation\| <= 90°. |
+| `--group PX` |  | Edge of the square groups of bright-field pixels whose vBF images are aligned (default: about 256 groups). |
+| `--mean-every K` | `8` | Average every K-th frame for the mean diffraction pattern. |
+| `--lowpass Q` |  | Highest spatial frequency (1/Å) the shifts are measured from; pixels within lowpass / Δk of the disk edge are not fitted. Default: 15% of the disk radius in 1/Å, at most the scan's Nyquist frequency. |
+| `--tol PX` | `0.01` | Stop the shift iterations when no shift changes by more than this. |
+| `--max-iterations MAX_ITERATIONS` | `30` | At most this many shift iterations. |
+| `--no-loss` | flag | Skip the variance-loss check along C10, rotation and handedness. |
+| `--device DEVICE` | `cpu` | Torch device for the cross-correlations and the loss. |
+| `--out PREFIX` |  | Write <prefix>.flags (run.py flags), <prefix>.json (all results) and <prefix>.png (diagnostics, needs matplotlib). |
+
+**acquisition values (required, no defaults)**
+
+| parameter | default | description |
+|---|---|---|
+| `--scan NY NX` | required | Scan grid. |
+| `--energy EV` | required | Beam energy (eV). |
+| `--semiangle MRAD` | required | Probe convergence semiangle (mrad). |
+| `--angular-sampling MRAD_PX` | required | Detector angular sampling of the recorded mode (mrad/px); scales the measured C10 and C12. |
+| `--scan-sampling ANG` | required | Scan step (Å). |
 
 ## `python -m tools.replay_to_zmq`
 

@@ -439,9 +439,23 @@ What only the real system can show, in order:
    - Record one scan at a known defocus with
      `python3 tools/record_stream.py capture --ip <DCU_IP> --out s1.dstream` (with nothing else
      listening).
-   - Measure `--center` on the raw frames.
-   - Find `--detector-layout` / `--rotation` offline by replaying it (`run.py --source s1.dstream
-     …`) and comparing the 8 layouts and a rotation sweep.
+   - Measure it with `python -m tools.calibrate_parallax s1.dstream --scan … --energy …
+     --semiangle … --angular-sampling … --scan-sampling … --rotation-prior <the rotation used live>
+     --out s1_cal`.
+     - It gives the disk centre on the raw frames and the flagged pixels, with whether they fall in
+       the disk.
+     - It measures the shift of each small group of bright-field pixels and fits the parallax
+       geometry: column flip (the sign of the fit's determinant), rotation, C10 and C12. The 8
+       layouts are one flip or none plus a rotation.
+     - It checks the fit with the variance loss and writes `s1_cal.flags` for `run.py`, with a
+       diagnostic plot.
+     - The shifts can't tell (C10, θ) from (−C10, θ + 180°). `--rotation-prior` picks the twin, so
+       the sign of C10 rests on knowing the rotation within ±90°.
+     - A departure from a quadratic aberration surface (C30, C21, C23, or radial distortion of the
+       pattern) is reported but not used. Parallax keeps χ(k ± q) to first order in q, and only for
+       quadratic χ is the dropped term the same for every bright-field pixel.
+   - Or replay it (`run.py --source s1.dstream …`) and compare the 8 layouts and a rotation sweep
+     by eye.
 5. **Knob sign and scale.** Set the target C10 to the microscope's readout. Sweep the focus knob
    through it in known steps; the best image should sit at the readout. An offset or mirror tells
    you the defocus sign convention (C10 = −Δf in abTEM's convention) or a center/rotation error.
@@ -610,6 +624,7 @@ realtime_stem/
   apps/run.py                  the runner (transport flags + continuous/rounds loop)
 tools/                         .dstream CLI, stream recorders, replay feeder, npy→.dstream, 4D-STEM
                                simulator (incl. multi-pass focus walks), synthetic-capture generator,
+                               geometry calibration from a recording (calibrate_parallax.py),
                                DCU setup (detector_setup.py)
 scripts/                       machine check, replay demos (Docker / local), accumulator benchmark,
                                CLI-reference generator

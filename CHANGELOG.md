@@ -4,6 +4,30 @@ Each release is a git tag (`git checkout v2.0.2`). Build the image of a release 
 checkout and tag it with the version, e.g. `docker build -t realtime-stem:v2.0.2 -f
 docker/Dockerfile .`, so the versions can be switched back and forth.
 
+## Unreleased
+
+**Calibration from a recording: `tools/calibrate_parallax.py`.** It takes one recorded scan (a
+`.dstream` or `.npy`) and the acquisition values, and measures the parallax geometry.
+
+- **What it measures:**
+  - the disk centre on the raw frames, and the flagged / hot pixels, with whether they fall in the
+    disk;
+  - the column flip (handedness), the rotation, C10 and C12.
+- **How:** it cross-correlates the virtual bright-field images of small groups of bright-field
+  pixels, then fits the engine's own shift model. The fit is checked with the variance loss, along
+  C10 and the rotation and against the other handedness.
+- **Output:** `<out>.flags` for `run.py`, `<out>.json`, and a diagnostic plot. `--rotation-prior`
+  picks between the twins (C10, θ) and (−C10, θ + 180°).
+- **Two measurement details:**
+  - Shifts are measured below a low-pass, from pixels clear of the disk edge by that frequency.
+    Near the edge only one sideband is transferred, which moves the correlation peak outwards.
+  - The estimates are refined against an affine-regularized reference until they converge.
+- **Diagnostic only:** departures from a quadratic aberration surface (C30, C21, C23, or radial
+  distortion of the pattern). Parallax keeps χ(k ± q) to first order, and only for quadratic χ is
+  the dropped term common to all bright-field pixels.
+- **Tests:** all 8 layouts, the twin and the flags round trip on simulated data. It is GUIDE
+  commissioning step 4.
+
 ## 2.1.0
 
 New in this release: a live phase-flipped image, any detector orientation, continuous scanning

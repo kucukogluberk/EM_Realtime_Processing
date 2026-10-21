@@ -33,7 +33,9 @@ Three stages, each changeable on its own:
   `algorithm.py` (CLI wiring and saving results).
 - `tools/`: the `.dstream` recording format, a stream recorder (`record_stream.py`, host Python
   with pyzmq + cbor2; stop the pipeline while it records), a replay feeder (`replay_to_zmq.py`),
-  a 4D-STEM simulator (`simulate_4dstem.py`), recording converters/generators,
+  a 4D-STEM simulator (`simulate_4dstem.py`), the geometry calibration from a recording
+  (`calibrate_parallax.py`: centre, flip, rotation, C10/C12 as `run.py` flags; read only, offline),
+  recording converters/generators,
   `check_gpu_copies.py` (a hardware check) and `detector_setup.py` (the DCU's settings over its
   REST API: `check`, `apply`, `arm`, `disarm`, `scan`; standard library only).
 - `scripts/check_install.sh`: the step-by-step machine check (DCU reachability and link speed,
