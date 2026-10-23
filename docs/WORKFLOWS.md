@@ -30,7 +30,9 @@ python -m realtime_stem.streaming.web tcp://127.0.0.1:5601
 - **Contrast:** limits from the whole frame's histogram, from what is on screen, or manual;
   gamma, colour map and invert.
 - **Display filters:** high-pass and low-pass, σ in Å.
-- **Fourier transform** of the visible region, with q and the d-spacing under the cursor.
+- **Fourier transform** of the visible region, with q and the d-spacing under the cursor. On a
+  partly scanned image (a scan's first pass, every pass of `reset`) it uses only the finished
+  rows.
 - **Scale bar,** pass number and progress bar.
 - **History:** pause (space) and a slider over past snapshots (`--history-mb`).
 - **Export:** PNG of the views, `.npy` of the full channels.

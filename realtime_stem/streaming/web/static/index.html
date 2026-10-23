@@ -413,7 +413,13 @@ async function fetchInto(p, url, key) {
       const H = (n) => r.headers.get(n);
       const hdr = {seq: +H("X-Seq"), shape: H("X-Shape").split(",").map(Number), region: H("X-Region").split(",").map(Number),
                    f: +(H("X-Factor") || 1), off: +H("X-Offset"), scale: +H("X-Scale")};
-      if (p.kind === "fft") { hdr.source = hdr.region; hdr.region = [0, 0, hdr.shape[0], hdr.shape[1]]; }
+      if (p.kind === "fft") {
+        hdr.source = hdr.region; hdr.region = [0, 0, hdr.shape[0], hdr.shape[1]];
+        // a partly scanned image: the server used only its finished rows
+        const n = hdr.shape[0], [ra, rb] = H("X-Rows") ? H("X-Rows").split(",").map(Number) : [0, n];
+        const note = rb - ra >= n ? "" : rb > ra ? ` · rows ${ra}–${rb} (scanned)` : " · nothing scanned in view";
+        p.el.querySelector(".title").textContent = `FFT · ${p.name}${note}`;
+      }
       const fresh = p.kind === "fft" && (!p.t || p.t.shape[0] !== hdr.shape[0]);
       p.upload(await r.arrayBuffer(), hdr, key);
       if (fresh) { const {cw, ch} = p.size(); p.cam = fitCam(hdr.shape[0], hdr.shape[1], cw, ch); }

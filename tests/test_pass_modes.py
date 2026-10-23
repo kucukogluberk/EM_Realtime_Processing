@@ -158,6 +158,41 @@ def test_a_series_per_pass_closes_each_pass_once():
     assert done == [0, 1, 2]
 
 
+@pytest.mark.parametrize("upsampling_factor", [1, 2])
+def test_complete_rows_of_an_image_filling_in(upsampling_factor):
+    geo = _geometry(upsampling_factor)
+    frames = _passes(1, seed=17)
+    full = _pass_ref(geo, frames, 0).result()
+    cut = 9 * _SCAN[1] + 4                                # 4 frames into the 10th scan row
+    acc = ParallaxAccumulator(geo, device="cpu")          # a single scan
+    assert acc.complete_rows() == [0, 0]
+    acc.process(frames[:cut], np.arange(cut))
+    r0, r1 = acc.complete_rows()
+    assert acc.snapshot()[2]["complete_rows"] == [r0, r1]
+    assert 0 < r1 - r0 < full.shape[0]
+    part = acc.result()
+    _close(part[r0:r1], full[r0:r1])                      # those rows are final …
+    for r in (r0 - 1, r1):                                # … the ones next to them are not
+        if 0 <= r < full.shape[0]:
+            assert not np.allclose(part[r], full[r])
+    acc.process(frames[cut:], np.arange(cut, _NPOS))
+    assert acc.complete_rows() is None and "complete_rows" not in acc.snapshot()[2]
+
+
+@pytest.mark.parametrize("mode", ["reset", "swap", "latest"])
+def test_complete_rows_in_the_continuous_modes(mode):
+    geo = _geometry()
+    frames = _passes(2, seed=18)
+    cut = 9 * _SCAN[1] + 4
+    acc = ParallaxAccumulator(geo, device="cpu", accumulate=mode, wrap_ids=True)
+    acc.process(frames[:cut], np.arange(cut))
+    first = acc.complete_rows()
+    assert first is not None and first[1] > first[0]      # every mode's first pass fills in
+    acc.process(frames[cut:_NPOS + cut], np.arange(cut, _NPOS + cut))
+    # on the next pass "reset" fills in again; "swap" and "latest" show a whole image
+    assert acc.complete_rows() == (first if mode == "reset" else None)
+
+
 @pytest.mark.parametrize("mode", ["latest", "all"])
 def test_track_passes_in_the_other_modes(mode):
     geo = _geometry()

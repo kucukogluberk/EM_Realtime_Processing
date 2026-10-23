@@ -639,6 +639,33 @@ class ParallaxAccumulator:
             return 0
         return (max_id % self.n_positions + 1) // self._nx
 
+    def complete_rows(self) -> list[int] | None:
+        """[r0, r1): the output rows of the live image that hold a finished image while it fills
+        in from empty (a scan's first pass, and every pass of "reset"), i.e. the longest run of
+        rows that every scan row depositing there has reached (`_row_source`; the torus wrap
+        keeps the top rows open until the pass ends). The rest is blank or partly deposited.
+        None once every row is complete ("swap" shows the last completed pass on the others)."""
+        max_id = int(self._max_id)
+        if max_id < 0:
+            return [0, 0]
+        if self._front is not None:
+            if self.accumulate == "swap" or self._n_frames == 0:
+                return None
+            rows = self._rows_done()
+        elif max_id >= self.n_positions:
+            return None
+        else:
+            rows = (max_id + 1) // self._nx
+        if rows * self._nx >= self.n_positions:
+            return None
+        done = np.concatenate(([0], (self._row_source < rows).astype(np.int8), [0]))
+        edges = np.flatnonzero(np.diff(done))
+        if edges.size == 0:
+            return [0, 0]
+        starts, ends = edges[::2], edges[1::2]
+        k = int(np.argmax(ends - starts))
+        return [int(starts[k]), int(ends[k])]
+
     def channels(self) -> dict[str, torch.Tensor]:
         """The live readout channels (`parallax`, `phase_flipped`, …) as device tensors.
 
@@ -691,6 +718,9 @@ class ParallaxAccumulator:
             "pass": max(max_id, 0) // self.n_positions,
             "progress": 0.0 if max_id < 0 else (max_id % self.n_positions + 1) / self.n_positions,
         }
+        rows = self.complete_rows()
+        if rows is not None:              # a partly filled image: e.g. the viewers' FFT uses these
+            meta["complete_rows"] = rows
         if self._track:
             meta["passes_completed"] = self.passes_completed
             meta["late_frames"] = self.late_frames

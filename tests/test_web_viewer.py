@@ -53,6 +53,13 @@ def test_store_wait_and_single_image():
     assert f is not None and f.names == ["reconstruction"] and f.stack.shape == (1, 8, 8)
 
 
+def test_store_stats_cover_only_the_scanned_rows():
+    stack = _stack(4)
+    stack[:, 40:] = 1e3                                           # rows not scanned yet
+    frame = FrameStore().put(stack, {"channels": ["a", "b"], "meta": {"complete_rows": [0, 40]}})
+    assert frame.stats[0]["max"] < 1e3 and frame.stack.shape == stack.shape
+
+
 def test_channel_stats_percentiles():
     img = np.arange(10000, dtype=np.float32).reshape(100, 100)
     s = channel_stats(img)
@@ -93,10 +100,34 @@ def test_encode_keeps_precision_at_any_level():
 def test_power_spectrum_finds_a_lattice():
     y, x = np.mgrid[:256, :256]
     img = np.cos(2 * np.pi * x / 8.0).astype(np.float32)          # 32 cycles across 256 px
-    spec, (cy, cx, n) = power_spectrum(img, 0, 0, 256, 256, n=256)
-    assert n == 256 and spec.shape == (256, 256)
+    spec, (cy, cx, n), used = power_spectrum(img, 0, 0, 256, 256, n=256)
+    assert n == 256 and spec.shape == (256, 256) and used == (0, 256)
     peak = np.unravel_index(np.argmax(spec), spec.shape)
     assert peak[0] == 128 and abs(peak[1] - 128) == 32
+
+
+def test_power_spectrum_of_a_partly_scanned_image():
+    # a lattice on the rows scanned so far, blank below: windowing every row of the square puts
+    # the edge of the scan into the spectrum as a streak along q_y (the q_x = 0 column)
+    y, x = np.mgrid[:256, :256]
+    img = (5.0 + np.cos(2 * np.pi * x / 8.0)).astype(np.float32)
+    img[160:] = 0.0
+    off_axis = np.abs(np.arange(256) - 128) > 4
+
+    def streak(s):
+        return np.median(s[off_axis, 128]) - np.median(s)
+
+    whole, _, _ = power_spectrum(img, 0, 0, 256, 256, n=256)
+    spec, (cy, cx, n), used = power_spectrum(img, 0, 0, 256, 256, n=256, rows=(20, 150))
+    assert (cy, n) == (0, 256) and used == (20, 150)
+    assert streak(whole) > 3 and streak(spec) < 0.5
+    peak = np.unravel_index(np.argmax(spec), spec.shape)
+    assert peak[0] == 128 and abs(peak[1] - 128) == 32
+    # a smaller square moves onto the scanned rows; none of them in view: a flat spectrum
+    _, (cy, _, _), used = power_spectrum(img, 0, 0, 256, 256, n=64, rows=(20, 150))
+    assert cy == 53 and used == (53, 117)
+    spec, _, used = power_spectrum(img, 200, 0, 56, 256, n=56, rows=(20, 150))
+    assert np.ptp(spec) == 0 and used[1] == used[0]
 
 
 @pytest.fixture()
@@ -134,7 +165,9 @@ def test_endpoints(server):
         + float(hdr["X-Offset"])
     np.testing.assert_allclose(back, stack[1].reshape(48, 2, 64, 2).mean(axis=(1, 3)), atol=0.05)
     status, hdr, body = _get(base + "/fft?ch=parallax&n=64")
-    assert hdr["X-Shape"] == "64,64" and len(body) == 64 * 64 * 2
+    assert hdr["X-Shape"] == "64,64" and len(body) == 64 * 64 * 2 and hdr["X-Rows"] == "16,80"
+    store.put(stack, {"channels": ["parallax", "phase_flipped"], "meta": {"complete_rows": [0, 40]}})
+    assert _get(base + "/fft?ch=parallax&n=64")[1]["X-Rows"] == "0,40"   # a partly scanned image
     status, hdr, body = _get(base + "/npy?ch=parallax")
     np.testing.assert_array_equal(np.load(io.BytesIO(body)), stack[0])
     for bad in ("/view?ch=nope", "/nope", "/static/../server.py", "/state?seq=99"):

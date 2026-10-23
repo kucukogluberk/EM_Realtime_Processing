@@ -255,7 +255,10 @@ serves a page at http://127.0.0.1:8050.
     native pixels);
   - limits from the whole frame's histogram, the visible view, or manual;
   - display-only Gaussian high- and low-pass filters, in Å;
-  - a live Fourier transform of the visible region, with q and d-spacing under the cursor;
+  - a live Fourier transform of the visible region, with q and d-spacing under the cursor. While
+    the image is still filling in (a scan's first pass, every pass of `reset`) it uses only the
+    finished rows, from the snapshot's `complete_rows`. So does the frame's histogram.
+    Otherwise the blank part and the edge of the scan would dominate both;
   - a scale bar (from the snapshot's `sampling_A`);
   - the pass / progress line;
   - pause (space) and a history slider over the kept snapshots (`--history-mb`, 512 MB by
