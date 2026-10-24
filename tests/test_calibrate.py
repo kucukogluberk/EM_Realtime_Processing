@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -45,6 +46,7 @@ def sim():
 
 def _calibrate(p, g, frames, **kw):
     kw.setdefault("loss", False)
+    kw.setdefault("refine", False)
     kw.setdefault("bootstrap", 20)
     return calibrate(array_batches(frames), p.scan, p.energy, p.semiangle, p.angular_sampling,
                      g.scan_step, log=lambda *a: None, **kw)
@@ -117,6 +119,49 @@ def test_flags_rebuild_the_simulators_geometry(sim):
     np.testing.assert_array_equal(ours.bf_flat_inds[order_o], theirs.bf_flat_inds[order_t])
     diff = np.abs(ours.shifts[order_o] - theirs.shifts[order_t])
     assert diff.max() <= 1 and diff.mean() < 0.05
+
+
+_NOISY = dict(scan=(48, 48), detector=(64, 64), semiangle=10, angular_sampling=0.5, scan_step=2.0,
+              rotation_deg=ROT, dose=20000, n_particles=8)
+
+
+def _frames(sims):
+    """The frames of several simulations of one scan, summed: in the weak-phase limit, one
+    specimen holding all their objects, each at its own defocus."""
+    return sum(np.concatenate([f for _, f in s.batches(512)]).astype(np.float32) for s in sims)
+
+
+def test_refinement_keeps_the_fit_without_a_lattice():
+    """Amorphous-like particles only: no C10 makes lattice spots stand out of the shot noise's
+    speckle, so --defocus keeps the shift fit."""
+    s = Simulation(SimParams(**_NOISY, seed=11, aberrations={"C10": C10}), device="cpu")
+    cal = _calibrate(s.params, s.grid, _frames([s]), refine=True)
+    rf = cal.refine
+    assert rf["band"] == pytest.approx([0.5 / s.grid.scan_step, 0.95 / s.grid.scan_step])
+    assert not rf["clear"] and not rf["used"]
+    assert cal.c10 == cal.geometry["c10"] == pytest.approx(C10, rel=0.02)
+    assert f"--defocus={cal.geometry['c10']:.0f}" in cal.flags()
+
+
+def test_refinement_finds_the_plane_of_the_lattice():
+    """Particles (low-frequency contrast) at C10 −1000 Å and a 3 Å lattice (beyond the ~3.7 Å
+    Nyquist period of the scan) 500 Å closer to focus: the shift fit measures the particles' plane,
+    the refinement the lattice's. Reconstructed at C10′ the lattice transfers about as
+    sin(πλC10′q²), near a zero at −500 Å for 3 Å, so the best C10′ sits a little beyond it."""
+    sims = [Simulation(SimParams(**_NOISY, seed=11 + i, aberrations={"C10": c10}), device="cpu")
+            for i, c10 in enumerate((-1000.0, -500.0))]
+    lattice = sims[1]
+    ny, nx = lattice.grid.object_shape
+    y, x = np.mgrid[:ny, :nx] / np.array([ny, nx])[:, None, None]
+    n = round(ny * lattice.grid.dx / 3.0)                  # whole periods: 3 Å on the object
+    lattice.phase = 0.15 * (np.cos(2 * np.pi * n * x) + np.cos(2 * np.pi * n * y))
+    lattice._trans = torch.as_tensor(np.exp(1j * lattice.phase).astype(np.complex64))
+    p, g = sims[0].params, sims[0].grid
+    cal = _calibrate(p, g, _frames(sims), refine=True)
+    assert cal.geometry["c10"] == pytest.approx(-1000, rel=0.03)
+    assert cal.refine["used"] and cal.refine["gain"] > 10
+    assert abs(cal.c10 - (-500)) < 0.5 * cal.depth_of_field
+    assert f"--defocus={cal.c10:.0f}" in cal.flags()
 
 
 def test_disk_and_flagged_pixels():

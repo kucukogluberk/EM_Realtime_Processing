@@ -64,6 +64,19 @@ It also reports flagged and hot pixels and whether they fall in the disk.
 Departures from a quadratic aberration surface (C30, C21, C23) are reported as a diagnostic only.
 Parallax corrects quadratic aberrations alone.
 
+**Focus on the lattice, not the support.**
+- **Why:** the shifts are measured at low spatial frequencies, so the fitted C10 focuses whatever
+  dominates there, often the support film. Particles sit about one radius off the support. On
+  the Au grating of 2026-10-23, the islands' lattice was sharpest 120–150 Å closer to focus than
+  the fit.
+- **What the tool does:** it then reconstructs ×4 images over a range of C10. It keeps the C10
+  where lattice spots beyond the scan's Nyquist frequency stand out most from the diffuse
+  background, and writes that C10 as `--defocus`. The fitted C10 is still reported.
+- **Without a lattice:** with no lattice above the noise, e.g. an amorphous specimen, it keeps
+  the fit.
+- **Options:** `--refine-band QMIN QMAX` sets the frequencies (e.g. a band about a lattice's
+  reflections), `--refine-span` the range, and `--no-refine` skips the step.
+
 ## Reconstruct it offline
 
 ```bash

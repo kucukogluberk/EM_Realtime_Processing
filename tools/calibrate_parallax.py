@@ -22,7 +22,12 @@ s = M·κ, with κ the pixel's angular offset from the disk centre on the raw fr
    and against the other handedness;
 6. reports, as a diagnostic only, how far the shifts depart from a quadratic aberration surface
    (C30, C21, C23). Parallax corrects quadratic aberrations alone (`higher_orders`), so only C10,
-   C12, θ and the flip go into the `run.py` flags.
+   C12, θ and the flip go into the `run.py` flags;
+7. refines C10 on the lattice (`refine_c10`). The shifts are measured at low spatial frequencies,
+   where a support film can dominate, and particles sit about one radius off the support. The
+   tool reconstructs ×4 images over a range of C10 and keeps the one whose lattice spots beyond
+   the scan's Nyquist frequency stand out most. That C10 goes into `--defocus` (without a lattice,
+   the fit's); the centre, rotation, flip and C12 stay from the fit.
 
 The shifts cannot tell (C10, C12, θ) from (−C10, −C12, θ + 180°). The twin whose rotation is nearest
 `--rotation-prior` is reported (without one, the twin with |θ| ≤ 90°). The fit measures the
@@ -46,7 +51,10 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # repo root → `import realtime_stem`
 
-from realtime_stem.processing.parallax.engine import _electron_wavelength  # noqa: E402
+from realtime_stem.processing.parallax.engine import (  # noqa: E402
+    _electron_wavelength,
+    preprocess_geometry,
+)
 
 Batches = Callable[[int], Iterator[tuple[np.ndarray, np.ndarray]]]
 
@@ -510,6 +518,7 @@ class Calibration:
     margin_px: float        # pixels closer than this to the disk edge are not used
     iterations: int
     loss: dict = field(default_factory=dict)
+    refine: dict = field(default_factory=dict)    # C10 on the lattice (`refine_c10`)
     timings: dict = field(default_factory=dict)
 
     @property
@@ -523,6 +532,12 @@ class Calibration:
     def astigmatism_significant(self) -> bool:
         return self.geometry["c12"] > 3 * self.sigma.get("c12", 0.0)
 
+    @property
+    def c10(self) -> float:
+        """The C10 `run.py` gets: refined on the lattice when that found a clear maximum, else
+        the shift fit's."""
+        return self.refine["best_c10"] if self.refine.get("used") else self.geometry["c10"]
+
     def flags(self) -> list[str]:
         """The `run.py` flags: the acquisition values given plus the geometry measured."""
         det = self.detector_shape
@@ -531,7 +546,7 @@ class Calibration:
         f += ["--scan", str(self.scan[0]), str(self.scan[1]), "--energy", f"{self.energy:g}",
               "--semiangle", f"{self.semiangle:g}", "--angular-sampling",
               f"{self.angular_sampling:g}", "--scan-sampling", f"{self.scan_sampling:g}",
-              f"--defocus={g['c10']:.0f}", f"--rotation={g['rotation_deg']:.2f}",
+              f"--defocus={self.c10:.0f}", f"--rotation={g['rotation_deg']:.2f}",
               "--center", f"{self.disk.center[0]:.2f}", f"{self.disk.center[1]:.2f}"]
         if g["flip_cols"]:
             f.append("--flip-cols")
@@ -545,10 +560,12 @@ def calibrate(batches: Batches, scan: tuple[int, int], energy: float, semiangle:
               rotation_prior: float | None = None, group: int | None = None,
               mean_every: int = 8, lowpass: float | None = None, tol: float = 0.01,
               max_iterations: int = 30, loss: bool = True, bootstrap: int = 200,
-              device: str = "cpu", log=print) -> Calibration:
+              refine: bool = True, refine_band: tuple[float, float] | None = None,
+              refine_span: float | None = None, device: str = "cpu", log=print) -> Calibration:
     """The whole calibration (module docstring). `lowpass` (1/Å) limits the spatial frequencies
     the shifts are measured from, and with them the band at the disk edge whose pixels are not
-    used (`bf_groups`); by default 15% of the disk radius, at most the scan's Nyquist."""
+    used (`bf_groups`); by default 15% of the disk radius, at most the scan's Nyquist. `refine`:
+    C10 on the lattice (`refine_c10`, with `refine_band` and `refine_span`)."""
     t0 = time.perf_counter()
     mean, n_mean, top = mean_pattern(batches, mean_every)
     disk = fit_disk(mean, top, n_mean)
@@ -600,8 +617,11 @@ def calibrate(batches: Batches, scan: tuple[int, int], energy: float, semiangle:
                       frames=placed, lowpass=lowpass, margin_px=margin, iterations=iterations)
     if loss:
         cal.loss = loss_scan(cal, images, kappa)
+    t4 = time.perf_counter()
+    if refine:
+        cal.refine = refine_c10(batches, cal, refine_band, refine_span, device=device)
     cal.timings = {"mean_pattern_s": t1 - t0, "vbf_stack_s": t2 - t1, "shifts_fit_s": t3 - t2,
-                   "loss_s": time.perf_counter() - t3}
+                   "loss_s": t4 - t3, "refine_s": time.perf_counter() - t4}
     cal._mean, cal._images, cal._kappa, cal._shifts, cal._keep = mean, images, kappa, shifts, keep
     cal._t = shifts[keep].mean(0) - model_shifts(cal.geometry, kappa[keep]).mean(0)
     return cal
@@ -633,6 +653,177 @@ def loss_scan(cal: Calibration, images: torch.Tensor, kappa: np.ndarray) -> dict
             "best_c10": float(c10s[np.nanargmin(l_c10)]),
             "best_rotation": float(rots[np.nanargmin(l_rot)]),
             "best_other_handedness": float(np.nanmin(l_other))}
+
+
+# ── 7. C10 on the lattice ──────────────────────────────────────────────────────
+
+def engine_geometry(cal: Calibration, c10: float | None = None, upsampling: int = 1):
+    """The engine's `ParallaxGeometry` for the calibrated geometry, as its `run.py` flags build it
+    (C12 only when significant), with C10 replaced by `c10`."""
+    g = cal.geometry
+    c12 = g["c12"] if cal.astigmatism_significant() else 0.0
+    return preprocess_geometry(
+        det_shape=tuple(cal.detector_shape), scan_shape=tuple(cal.scan),
+        scan_sampling=(cal.scan_sampling, cal.scan_sampling), energy=cal.energy,
+        semiangle_cutoff=cal.semiangle,
+        angular_sampling=(cal.angular_sampling, cal.angular_sampling),
+        aberration_coefs={"C10": g["c10"] if c10 is None else c10, "C12": c12,
+                          "phi12": math.radians(g["phi12_deg"])},
+        rotation_angle=math.radians(g["rotation_deg"]), upsampling_factor=upsampling,
+        probe_center=tuple(cal.disk.center), flip_cols=g["flip_cols"])
+
+
+def bright_field_values(batches: Batches, pixels: np.ndarray, scan: tuple[int, int],
+                        edge: int = 128) -> tuple[tuple[int, int], np.ndarray]:
+    """The bright-field `pixels` (flat indices into a frame) of the frames in the central
+    ≤ edge × edge positions of the scan, each pixel's mean over them removed (the readout's DC
+    correction on a complete scan): ((ny, nx) of the region, (ny·nx, M) float32)."""
+    ny, nx = scan
+    edge = max(16, min(edge, int(math.sqrt(5e7 / max(len(pixels), 1)))))   # ≤ 200 MB
+    cy, cx = min(ny, edge), min(nx, edge)
+    y0, x0 = (ny - cy) // 2, (nx - cx) // 2
+    vals = np.zeros((cy * cx, len(pixels)), np.float32)
+    seen = np.zeros(cy * cx, bool)
+    for ids, frames in batches(1):
+        keep = ids < ny * nx
+        iy, ix = np.divmod(ids[keep], nx)
+        inside = (iy >= y0) & (iy < y0 + cy) & (ix >= x0) & (ix < x0 + cx)
+        if inside.any():
+            loc = (iy[inside] - y0) * cx + (ix[inside] - x0)
+            vals[loc] = frames.reshape(len(frames), -1)[keep][inside][:, pixels]
+            seen[loc] = True
+    vals[seen] -= vals[seen].mean(0)
+    return (cy, cx), vals
+
+
+def _deposit(vals: torch.Tensor, region: tuple[int, int], shifts: np.ndarray, upsampling: int,
+             chunk: int = 2048) -> torch.Tensor:
+    """The engine's deposit: each position's bright-field pixels `vals` at their integer
+    `shifts` on the ×`upsampling` grid, wrapped on the region's torus."""
+    cy, cx = region
+    nyu, nxu = cy * upsampling, cx * upsampling
+    dev = vals.device
+    sy = torch.as_tensor(shifts[:, 0], dtype=torch.long, device=dev)
+    sx = torch.as_tensor(shifts[:, 1], dtype=torch.long, device=dev)
+    out = torch.zeros(nyu * nxu, dtype=torch.float32, device=dev)
+    for s in range(0, cy * cx, chunk):
+        pos = torch.arange(s, min(s + chunk, cy * cx), device=dev)
+        oy = ((pos // cx) * upsampling)[:, None] + sy[None, :]
+        ox = ((pos % cx) * upsampling)[:, None] + sx[None, :]
+        out.index_add_(0, ((oy % nyu) * nxu + (ox % nxu)).reshape(-1),
+                       vals[s:s + len(pos)].reshape(-1))
+    return out.view(nyu, nxu)
+
+
+def _lattice_prominence(vals: torch.Tensor, region: tuple[int, int], shifts: np.ndarray,
+                        upsampling: int, window: torch.Tensor, rings: torch.Tensor,
+                        n_rings: int, top: float = 1e-3) -> float:
+    """How far the sharpest spots of the reconstruction's power spectrum stand above its diffuse
+    background in the band: the mean of the top `top` fraction of the band's pixels, each divided
+    by its ring's median power (`rings`: ring index per pixel, −1 outside the band).
+
+    Diffuse power (shot noise, amorphous detail, aliases of the low frequencies left by
+    misalignment) has speckle statistics, whose top/median ratio is the same at any level: only
+    sharp spots, a lattice's reflections, raise it. Each output pixel is divided by the number of
+    bright-field pixels in its sub-pixel phase class (the U×U classes the shifts fall in modulo U),
+    so uneven coverage of the classes (e.g. all in one at C10 ≈ 0) adds no comb. NaN when a class
+    is empty."""
+    u = upsampling
+    cy, cx = region
+    count = np.bincount((shifts[:, 0] % u) * u + (shifts[:, 1] % u), minlength=u * u)
+    if (count == 0).any():
+        return float("nan")
+    yy, xx = np.indices((cy * u, cx * u))
+    norm = torch.as_tensor((1.0 / count[(yy % u) * u + (xx % u)]).astype(np.float32),
+                           device=vals.device)
+    spec = torch.fft.fft2(_deposit(vals, region, shifts, u) * norm * window)
+    p = (spec.real ** 2 + spec.imag ** 2)[rings >= 0]
+    r = rings[rings >= 0]
+    med = torch.stack([p[r == k].median() for k in range(n_rings)])
+    rel = p / med[r].clamp_min(1e-30)
+    k = max(8, int(top * rel.numel()))
+    return float(torch.topk(rel, k).values.mean())
+
+
+def refine_c10(batches: Batches, cal: Calibration, band: tuple[float, float] | None = None,
+               span: float | None = None, upsampling: int = 4, edge: int = 128,
+               device: str = "cpu") -> dict:
+    """C10 where a lattice is sharpest. The shifts are measured below `cal.lowpass`, where
+    whatever dominates the low frequencies sets the focus: on a support film with particles, the
+    film. Particles sit about a radius off it, and their lattice is what upsampling is for. So:
+    reconstruct the central ≤ edge² positions at ×`upsampling` (the engine's own geometry and
+    rounding) for C10 over the fit ± `span` (on the fit's side of zero), and keep the C10 whose
+    power spectrum shows the most prominent lattice spots (`_lattice_prominence`) in `band` (1/Å;
+    default from the scan's Nyquist frequency to 0.95× the scan frequency, what only upsampling
+    recovers), less disks about the scan lattice's reciprocal points (±1/step), where the
+    strongest aliases of the low frequencies land. Coarse steps of one depth of field λ/α², then
+    quarter steps about the best.
+
+    What it maximizes is the lattice contrast of the reconstruction. Reconstructed at C10′, the
+    image transfers frequency q about as sin(πλC10′q²), so the best C10′ for a lattice can lie
+    up to ~half a depth of field from its plane, on the side where its reflections transfer
+    better.
+
+    `used` is false when the maximum lies at the end of the range (widen `span`) or no C10 stands
+    out (no lattice above the diffuse background, e.g. an amorphous specimen): `--defocus` then
+    keeps the shift fit."""
+    g = cal.geometry
+    step = cal.scan_sampling
+    lo, hi = band if band is not None else (0.5 / step, 0.95 / step)
+    dof = cal.depth_of_field
+    fit = g["c10"]
+    span = span if span is not None else max(0.5 * abs(fit), 10 * dof)
+    base = engine_geometry(cal, upsampling=upsampling)
+    region, vals = bright_field_values(batches, base.bf_flat_inds, cal.scan, edge)
+    vals = torch.as_tensor(vals, device=device)
+    nyu, nxu = region[0] * upsampling, region[1] * upsampling
+    fy = np.fft.fftfreq(nyu, step / upsampling)[:, None]
+    fx = np.fft.fftfreq(nxu, step / upsampling)[None, :]
+    q = np.hypot(fy, fx)
+    keep = (q >= lo) & (q < hi)
+    r_alias = max(cal.lowpass, 0.15 / step)
+    for ky in (-1, 0, 1):
+        for kx in (-1, 0, 1):
+            if ky or kx:
+                keep &= np.hypot(fy - ky / step, fx - kx / step) > r_alias
+    n_rings = 16
+    ring = np.minimum(((q - lo) / (hi - lo) * n_rings).astype(int), n_rings - 1)
+    ring = np.where(keep, ring, -1)
+    present = np.unique(ring[ring >= 0])
+    ring = np.where(ring >= 0, np.searchsorted(present, ring), -1)     # drop rings left empty
+    rings = torch.as_tensor(ring, device=device)
+    window = torch.as_tensor(np.outer(np.hanning(nyu), np.hanning(nxu)).astype(np.float32),
+                             device=device)
+
+    prominence: dict[float, float] = {}
+
+    def at(c: float) -> float:
+        c = round(float(c), 3)
+        if c not in prominence:
+            geo = engine_geometry(cal, c, upsampling)
+            assert np.array_equal(geo.bf_flat_inds, base.bf_flat_inds)
+            prominence[c] = _lattice_prominence(vals, region, geo.shifts, upsampling, window,
+                                                rings, len(present))
+        return prominence[c]
+
+    n = int(math.ceil(span / dof))
+    coarse = fit + dof * np.arange(-n, n + 1)
+    coarse = coarse[coarse * np.sign(fit) > dof]                  # the fit's side of zero
+    values = np.array([at(c) for c in coarse])
+    best = coarse[int(np.nanargmax(values))]
+    for c in best + dof / 4 * np.arange(-4, 5):
+        at(c)
+    cs = np.array(sorted(prominence))
+    p = np.array([prominence[c] for c in cs])
+    best = float(cs[np.nanargmax(p)])
+    at_edge = best < coarse.min() + 0.5 * dof or best > coarse.max() - 0.5 * dof
+    # stands out: the best prominence is well above the curve's typical (speckle-only) level
+    clear = bool(np.nanmax(p) > 1.5 * np.nanmedian(p))
+    at_fit = at(fit)
+    return {"band": [lo, hi], "upsampling": upsampling, "region": list(region),
+            "alias_radius": r_alias, "c10": cs.tolist(), "prominence": p.tolist(),
+            "best_c10": best, "fit_c10": fit, "gain": float(np.nanmax(p) / at_fit),
+            "at_edge": bool(at_edge), "clear": clear, "used": bool(clear and not at_edge)}
 
 
 # ── report ─────────────────────────────────────────────────────────────────────
@@ -681,6 +872,24 @@ def report(cal: Calibration) -> list[str]:
             f"{lo['no_shift']:.4f}, other handedness at best {lo['best_other_handedness']:.4f}, "
             f"with the higher orders {lo['with_higher_orders']:.4f}; minimum along C10 at "
             f"{lo['best_c10']:.0f} Å, along θ at {lo['best_rotation']:.2f}°")
+    if cal.refine:
+        rf = cal.refine
+        where = (f"C10 {rf['best_c10']:.0f} Å, {rf['gain']:.2f}× the lattice prominence at the "
+                 f"shift fit's {rf['fit_c10']:.0f} Å")
+        if rf["used"]:
+            verdict = "--defocus uses it"
+            if abs(rf["best_c10"] - rf["fit_c10"]) > 2 * cal.depth_of_field:
+                verdict += (" (the low-frequency contrast the shifts measure, e.g. a support film, "
+                            "focuses elsewhere)")
+        elif rf["at_edge"]:
+            verdict = "at the end of the range: --defocus keeps the shift fit; widen --refine-span"
+        else:
+            verdict = ("no C10 stands out (no lattice above the diffuse background): --defocus "
+                       "keeps the shift fit")
+        lines.append(
+            f"[calibrate] focus on the lattice ({rf['band'][0]:.3f}–{rf['band'][1]:.3f} 1/Å, "
+            f"×{rf['upsampling']} over {rf['region'][0]}x{rf['region'][1]} positions): {where}; "
+            f"{verdict}")
     return lines
 
 
@@ -752,6 +961,15 @@ def plot(cal: Calibration, path: Path) -> None:
         ax[1, 2].legend()
         ax[1, 2].set_xlabel("rotation (°)")
         ax[1, 2].set_title("the other handedness, all rotations")
+    if cal.refine:
+        rf = cal.refine
+        a = ax[1, 0].twinx() if cal.loss else ax[1, 0]
+        a.plot(rf["c10"], rf["prominence"], ".-", color="tab:orange")
+        a.axvline(rf["best_c10"], color="tab:orange", ls="--")
+        a.set_ylabel(f"lattice prominence {rf['band'][0]:.2f}–{rf['band'][1]:.2f} 1/Å",
+                     color="tab:orange")
+        ax[1, 0].set_xlabel("C10 (Å)")
+        ax[1, 0].set_title("along C10: loss (blue) and lattice prominence (orange)")
 
     images = cal._images
     qy, qx = _freqs(images.shape[1:], images.device)
@@ -764,7 +982,8 @@ def plot(cal: Calibration, path: Path) -> None:
     for a in (ax[0, 0], ax[1, 3]):
         a.set_xticks([])
         a.set_yticks([])
-    fig.suptitle(f"C10 {g['c10']:.0f} Å, θ {g['rotation_deg']:.2f}°, "
+    fig.suptitle(f"C10 {g['c10']:.0f} Å (shift fit; --defocus {cal.c10:.0f} Å), "
+                 f"θ {g['rotation_deg']:.2f}°, "
                  f"{'flipped' if g['flip_cols'] else 'unflipped'} columns, C12 {g['c12']:.0f} Å  "
                  f"|  diagnostic: C30 {ho['c30'] / 1e4:.2f} µm")
     fig.tight_layout()
@@ -809,8 +1028,20 @@ def build_parser() -> argparse.ArgumentParser:
                    help="At most this many shift iterations.")
     p.add_argument("--no-loss", dest="loss", action="store_false",
                    help="Skip the variance-loss check along C10, rotation and handedness.")
+    p.add_argument("--no-refine", dest="refine", action="store_false",
+                   help="Keep the shift fit's C10 in --defocus: skip the refinement on the "
+                        "lattice (the C10 that sharpens a particle's lattice rather than its "
+                        "support film).")
+    p.add_argument("--refine-band", type=float, nargs=2, default=None, metavar=("QMIN", "QMAX"),
+                   help="Spatial frequencies (1/Å) where the refinement looks for lattice spots. "
+                        "Default: "
+                        "from the scan's Nyquist frequency to 0.95× the scan frequency (what only "
+                        "upsampling recovers); e.g. a band about a lattice's reflections.")
+    p.add_argument("--refine-span", type=float, default=None, metavar="ANG",
+                   help="The refinement searches C10 within ± this of the shift fit (Å). "
+                        "Default: half the fitted |C10|, at least 10 depths of field.")
     p.add_argument("--device", default="cpu",
-                   help="Torch device for the cross-correlations and the loss.")
+                   help="Torch device for the cross-correlations, the loss and the refinement.")
     p.add_argument("--out", type=Path, default=None, metavar="PREFIX",
                    help="Write <prefix>.flags (run.py flags), <prefix>.json (all results) and "
                         "<prefix>.png (diagnostics, needs matplotlib).")
@@ -826,7 +1057,9 @@ def main(argv: list[str] | None = None) -> Calibration:
                     args.angular_sampling, args.scan_sampling,
                     rotation_prior=args.rotation_prior, group=args.group,
                     mean_every=args.mean_every, lowpass=args.lowpass, tol=args.tol,
-                    max_iterations=args.max_iterations, loss=args.loss, device=args.device)
+                    max_iterations=args.max_iterations, loss=args.loss, refine=args.refine,
+                    refine_band=tuple(args.refine_band) if args.refine_band else None,
+                    refine_span=args.refine_span, device=args.device)
     for line in report(cal):
         print(line, flush=True)
     flags = " ".join(cal.flags())

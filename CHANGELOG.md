@@ -65,6 +65,18 @@ replaces the matplotlib window as the recommended viewer.
 - **Diagnostic only:** departures from a quadratic aberration surface (C30, C21, C23, or radial
   distortion of the pattern). Parallax keeps χ(k ± q) to first order, and only for quadratic χ is
   the dropped term common to all bright-field pixels.
+- **C10 on the lattice.** The shifts are measured at low frequencies, so the fit focuses the
+  support film. The tool then reconstructs ×4 images over a range of C10 and keeps the one at
+  which lattice spots beyond the scan's Nyquist frequency stand out most from the diffuse
+  background. That value goes into `--defocus`.
+  - **The score:** a top-pixel/median ratio, ring by ring. Noise, amorphous contrast and aliases
+    have the same ratio at any level, so only spots raise it.
+  - **Sub-pixel phase classes:** each output pixel is normalized by its class count, so uneven
+    coverage adds no comb.
+  - **On the Au grating:** the lattice was sharpest 136–148 Å closer to focus than the fit,
+    with 24–32× the prominence.
+  - **Without a lattice:** it keeps the fit.
+  - **Options:** `--refine-band`, `--refine-span`, `--no-refine`.
 - **Tests:** all 8 layouts, the twin and the flags round trip on simulated data. It is GUIDE
   commissioning step 4.
 

@@ -196,7 +196,8 @@ usage: python -m tools.calibrate_parallax [-h] --scan NY NX --energy EV --semian
                                           [--rotation-prior DEG] [--group PX] [--mean-every K]
                                           [--lowpass Q] [--tol PX]
                                           [--max-iterations MAX_ITERATIONS] [--no-loss]
-                                          [--device DEVICE] [--out PREFIX]
+                                          [--no-refine] [--refine-band QMIN QMAX]
+                                          [--refine-span ANG] [--device DEVICE] [--out PREFIX]
                                           recording
 ```
 
@@ -217,7 +218,10 @@ usage: python -m tools.calibrate_parallax [-h] --scan NY NX --energy EV --semian
 | `--tol PX` | `0.01` | Stop the shift iterations when no shift changes by more than this. |
 | `--max-iterations MAX_ITERATIONS` | `30` | At most this many shift iterations. |
 | `--no-loss` | flag | Skip the variance-loss check along C10, rotation and handedness. |
-| `--device DEVICE` | `cpu` | Torch device for the cross-correlations and the loss. |
+| `--no-refine` | flag | Keep the shift fit's C10 in --defocus: skip the refinement on the lattice (the C10 that sharpens a particle's lattice rather than its support film). |
+| `--refine-band QMIN QMAX` |  | Spatial frequencies (1/Å) where the refinement looks for lattice spots. Default: from the scan's Nyquist frequency to 0.95× the scan frequency (what only upsampling recovers); e.g. a band about a lattice's reflections. |
+| `--refine-span ANG` |  | The refinement searches C10 within ± this of the shift fit (Å). Default: half the fitted \|C10\|, at least 10 depths of field. |
+| `--device DEVICE` | `cpu` | Torch device for the cross-correlations, the loss and the refinement. |
 | `--out PREFIX` |  | Write <prefix>.flags (run.py flags), <prefix>.json (all results) and <prefix>.png (diagnostics, needs matplotlib). |
 
 **acquisition values (required, no defaults)**

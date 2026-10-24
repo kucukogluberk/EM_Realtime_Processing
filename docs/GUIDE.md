@@ -530,6 +530,10 @@ What only the real system can show, in order:
        layouts are one flip or none plus a rotation.
      - It checks the fit with the variance loss and writes `s1_cal.flags` for `run.py`, with a
        diagnostic plot.
+     - It refines C10 on the lattice. The shifts are measured at low frequencies, where a support
+       film dominates. A range of ×4 reconstructions then picks the C10 at which the lattice spots
+       beyond the scan's Nyquist frequency stand out most, and `--defocus` gets that value.
+       Without a lattice it keeps the fit; `--no-refine` skips the step.
      - The shifts can't tell (C10, θ) from (−C10, θ + 180°). `--rotation-prior` picks the twin, so
        the sign of C10 rests on knowing the rotation within ±90°.
      - A departure from a quadratic aberration surface (C30, C21, C23, or radial distortion of the
