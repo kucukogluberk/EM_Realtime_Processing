@@ -4,7 +4,13 @@ Each release is a git tag (`git checkout v2.0.2`). Build the image of a release 
 checkout and tag it with the version, e.g. `docker build -t realtime-stem:v2.0.2 -f
 docker/Dockerfile .`, so the versions can be switched back and forth.
 
-## Unreleased
+## 2.2.0
+
+New in this release: a browser viewer served by `run.py --viewer-port` with live tuning of
+C10, the rotation, C12 and the accumulate mode; recording the viewer; the geometry calibration
+from a recording (C10 refined on the lattice); the continuous modes `reset` and `swap`; tools to
+loop and refocus a recording; one layout for recorded sessions. The C++/CUDA operators are
+unchanged (still 2.0.1), so an image built for 2.1.0 runs it.
 
 **Record the viewer.** Save → "● record" writes a video in one of two kinds.
 
