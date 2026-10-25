@@ -42,6 +42,12 @@ main { position: relative; display: grid; gap: 6px; padding: 6px; overflow: hidd
             text-shadow: 0 0 3px #000, 0 0 2px #000; }
 .scalebar div { height: 4px; background: #fff; box-shadow: 0 0 3px #000; margin-bottom: 3px; }
 .outline { position: absolute; border: 1px dashed rgba(255, 210, 80, .85); pointer-events: none; display: none; }
+.rings { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.rings circle { fill: none; }
+.rings circle.halo { stroke: rgba(0, 0, 0, .75); stroke-width: 3.5; }
+.rings circle.dash { stroke-width: 1.5; stroke-dasharray: 6 4; }
+.rings text { font: 12px system-ui, sans-serif; paint-order: stroke; stroke: rgba(0, 0, 0, .8); stroke-width: 3px;
+              stroke-linejoin: round; }
 #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
 .hint { color: var(--muted); font-size: 11px; margin-top: 4px; }
 </style>
@@ -173,12 +179,13 @@ class Panel {
     this.el = document.createElement("div");
     this.el.className = "panel";
     this.el.innerHTML = `<header><span class="title"></span><span class="info mono"></span></header>
-      <div class="stage" title="wheel: zoom · drag: pan · double-click: fit"><canvas></canvas><div class="outline"></div><div class="scalebar"></div></div>`;
+      <div class="stage" title="wheel: zoom · drag: pan · double-click: fit"><canvas></canvas><div class="outline"></div><svg class="rings"></svg><div class="scalebar"></div></div>`;
     $("panels").appendChild(this.el);
     this.stage = this.el.querySelector(".stage");
     this.canvas = this.el.querySelector("canvas");
     this.bar = this.el.querySelector(".scalebar");
     this.box = this.el.querySelector(".outline");
+    this.rings = this.el.querySelector(".rings");
     this.info = this.el.querySelector(".info");
     this.titleEl = this.el.querySelector(".title");
     this.note = "";
@@ -274,6 +281,11 @@ class Panel {
       Object.assign(this.box.style, {display: "block", left: `${(sx - c.cx) * c.zoom + cw / 2}px`,
         top: `${(sy - c.cy) * c.zoom + ch / 2}px`, width: `${n * c.zoom}px`, height: `${n * c.zoom}px`});
     } else this.box.style.display = "none";
+    this.rings.innerHTML = this.kind === "fft" ? cutoffs(this, c.zoom, cw / 2, ch / 2).map((r) =>
+      `<circle class="halo" cx="${r.x}" cy="${r.y}" r="${r.r}"/>` +
+      `<circle class="dash" cx="${r.x}" cy="${r.y}" r="${r.r}" stroke="${r.color}"/>` +
+      `<text x="${r.x + r.r * 0.71 + 6}" y="${r.y + r.side * (r.r * 0.71 + 6)}" fill="${r.color}"
+        dominant-baseline="${r.side < 0 ? "auto" : "hanging"}">${r.label}</text>`).join("") : "";
   }
   upload(buf, hdr, key) {
     const gl = this.gl, [h, w] = hdr.shape, u16 = new Uint16Array(buf);
@@ -403,6 +415,21 @@ function scaleBar(p, zoom, width) {               // {px, label}: a round length
   const label = p.kind === "fft" ? `${+nice.toPrecision(3)} Å⁻¹`
     : nice >= 10 ? `${+(nice / 10).toPrecision(3)} nm` : `${+nice.toPrecision(3)} Å`;
   return {px: nice / per, label};
+}
+
+// The display filters' cutoffs on the FFT panel: where each Gaussian's amplitude transfer is ½,
+// q½ = √(2 ln 2) / (2πσ), as circles in px of the canvas whose centre is (ox, oy) at this zoom.
+function cutoffs(p, zoom, ox, oy) {
+  const t = p.t, c = p.camera(), u = sampling(); if (!t || !c || !t.n) return [];
+  const dc = (t.n / 2 + 0.5) / t.bin, x = (dc - c.cx) * zoom + ox, y = (dc - c.cy) * zoom + oy;
+  const unit = u ? "Å" : "px", out = [];
+  for (const [sigma, name, color, side] of [[S.lpA, "low-pass", "#7fd4ff", -1], [S.hpA, "high-pass", "#9dff8a", 1]]) {
+    if (!(sigma > 0)) continue;
+    const q = Math.sqrt(2 * Math.LN2) / (2 * Math.PI * sigma);          // 1/Å (1/px without a sampling)
+    const r = q * t.n * (u || 1) / t.bin * zoom;                         // texels → canvas px
+    out.push({x, y, r, color, side, label: `${name} ½ at d = ${+(1 / q).toPrecision(3)} ${unit}`});
+  }
+  return out;
 }
 
 // ── panels, cameras, fetching ────────────────────────────────────────────────
@@ -659,6 +686,14 @@ function exportPng() {
       g.fillRect(bx, by - 4 * dpr, bar.px, 4 * dpr);
       g.fillText(bar.label, bx, by - 14 * dpr);
     }
+    for (const r of p.kind === "fft" ? cutoffs(p, c.zoom * dpr, p.canvas.width / 2, p.canvas.height / 2) : []) {
+      g.setLineDash([]); g.lineWidth = 3.5 * dpr; g.strokeStyle = "rgba(0, 0, 0, .75)";
+      g.beginPath(); g.arc(x + r.x, head + r.y, r.r, 0, 2 * Math.PI); g.stroke();
+      g.strokeStyle = g.fillStyle = r.color; g.setLineDash([6 * dpr, 4 * dpr]); g.lineWidth = 1.5 * dpr;
+      g.beginPath(); g.arc(x + r.x, head + r.y, r.r, 0, 2 * Math.PI); g.stroke();
+      g.fillText(r.label, x + r.x + r.r * 0.71 + 6 * dpr, head + r.y + r.side * (r.r * 0.71 + 10 * dpr));
+    }
+    g.fillStyle = "#fff";
     const box = p.kind === "image" ? fftRegion() : null;
     if (box) {                                    // the Fourier transform's square
       const [sy, sx, n] = box, z = c.zoom * dpr;
