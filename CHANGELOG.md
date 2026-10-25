@@ -6,6 +6,15 @@ docker/Dockerfile .`, so the versions can be switched back and forth.
 
 ## Unreleased
 
+**Record the viewer.** Save → "● record" writes a video of the view as the PNG export composes
+it: the image, the Fourier transform if open, scale bars, cutoff circles and the caption.
+
+- **Rate:** fixed, 10 frames/s by default, 5–30 in a dropdown.
+- **Format:** H.264 `.mkv` in Chrome and Edge, VP9 `.webm` in Firefox, `.mp4` in Safari.
+  - A 6 s recording at 1286×802 is about 2 MB.
+  - The page adds the duration that `MediaRecorder` leaves out, so players show the length and
+    can seek.
+
 **Tune the reconstruction from the browser: `run.py --viewer-port 8050`.** The pipeline serves
 the viewer itself (one command instead of two), and the page's Reconstruction section fine-tunes
 the running reconstruction.

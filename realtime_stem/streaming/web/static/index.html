@@ -52,6 +52,10 @@ main { position: relative; display: grid; gap: 6px; padding: 6px; overflow: hidd
 .rings circle.halo { stroke: rgba(0, 0, 0, .75); stroke-width: 3.5; }
 .rings circle.dash { stroke-width: 1.5; stroke-dasharray: 6 4; }
 
+body.recording #dot { box-shadow: 0 0 0 3px rgba(229, 83, 75, .55); }
+#rec { white-space: nowrap; flex: none; }
+#recnote { margin-top: 2px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.recording #rec { border-color: var(--bad); color: var(--bad); }
 #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
 .hint { color: var(--muted); font-size: 11px; margin-top: 4px; }
 </style>
@@ -110,6 +114,11 @@ main { position: relative; display: grid; gap: 6px; padding: 6px; overflow: hidd
   <details id="sec-save"><summary>Save</summary>
     <div class="row"><button id="png" title="the image as shown, with the Fourier transform if open">PNG of the view</button>
       <button id="npy" title="the shown channel at full resolution, without the high-/low-pass">.npy (full)</button></div>
+    <div class="row"><button id="rec" title="a video of the view as the PNG shows it (image, Fourier transform, scale bars, caption); .mkv (H.264) in Chrome, .webm in Firefox">● record</button>
+      <select id="recfps" title="frames per second of the video">
+        <option value="5">5 fps</option><option value="10" selected>10 fps</option><option value="15">15 fps</option>
+        <option value="20">20 fps</option><option value="30">30 fps</option></select></div>
+    <div id="recnote" class="muted"></div>
   </details>
 </aside>
 <main id="panels"><div id="empty">waiting for a snapshot…</div></main>
@@ -680,8 +689,8 @@ function bindHistDrag() {
   window.addEventListener("mousemove", move);
   window.addEventListener("mouseup", () => { which = null; });
 }
-function exportPng() {
-  const ps = panelList().filter((p) => p.t && p.camera()); if (!ps.length || !S.shown) return;
+function composeView() {                          // the view as one canvas: panels, scale bars, caption
+  const ps = panelList().filter((p) => p.t && p.camera()); if (!ps.length || !S.shown) return null;
   for (const p of ps) p.draw();
   const dpr = devicePixelRatio || 1, gap = Math.round(8 * dpr), head = Math.round(24 * dpr);
   const W = ps.reduce((a, p) => a + p.canvas.width, 0) + gap * (ps.length - 1);
@@ -719,8 +728,114 @@ function exportPng() {
     g.restore();
     x += p.canvas.width + gap;
   }
-  cv.toBlob((b) => { const a = document.createElement("a"); a.href = URL.createObjectURL(b);
-    a.download = `realtime-stem_${S.shown.seq}_${chan()}${S.fft ? "_fft" : ""}.png`; a.click(); });
+  return cv;
+}
+function download(blob, name) {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+function exportPng() {
+  const cv = composeView(); if (!cv) return;
+  cv.toBlob((b) => download(b, `realtime-stem_${S.shown.seq}_${chan()}${S.fft ? "_fft" : ""}.png`));
+}
+
+// ── recording the view: the composition above at a fixed rate (10 frames/s), through MediaRecorder ──
+const REC = {rec: null, timer: null, t0: 0, cv: null, track: null};
+function recordingFormat() {                      // the first container/codec this browser records
+  for (const [type, ext] of [["video/x-matroska;codecs=avc1", "mkv"], ["video/webm;codecs=vp9", "webm"],
+                             ["video/webm;codecs=vp8", "webm"], ["video/webm", "webm"], ["video/mp4", "mp4"]])
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(type)) return {type, ext};
+  return null;
+}
+function fitInto(dst, src) {                      // src scaled into dst (a fixed size), letterboxed
+  const g = dst.getContext("2d"), k = Math.min(dst.width / src.width, dst.height / src.height);
+  const w = src.width * k, h = src.height * k;
+  g.fillStyle = "#101317"; g.fillRect(0, 0, dst.width, dst.height);
+  g.drawImage(src, (dst.width - w) / 2, (dst.height - h) / 2, w, h);
+}
+// MediaRecorder writes Matroska / WebM without a duration, so players show no length or seek
+// bar: add one (Segment → Info → Duration, float64 in TimecodeScale units) before saving.
+async function withDuration(blob, ms) {
+  const b = new Uint8Array(await blob.arrayBuffer());
+  const vint = (i, id) => {                       // EBML variable-length integer: [value, bytes]
+    let n = 1; while (n < 8 && !(b[i] & (0x80 >> (n - 1)))) n++;
+    let v = id ? b[i] : b[i] & ((0x80 >> (n - 1)) - 1);
+    for (let k = 1; k < n; k++) v = v * 256 + b[i + k];
+    return [v, n];
+  };
+  const el = (i) => { const [id, a] = vint(i, true), [size, c] = vint(i + a); return {id, at: i, head: a + c, len: c, size}; };
+  const unknown = (e) => e.size === 2 ** (7 * e.len) - 1;
+  try {
+    const hdr = el(0), seg = el(hdr.head + hdr.size);
+    if (hdr.id !== 0x1A45DFA3 || seg.id !== 0x18538067) return blob;
+    for (let i = seg.at + seg.head, k = 0; k < 8 && i < b.length; k++) {
+      const e = el(i);
+      if (e.id === 0x1549A966) {                  // Info
+        let scale = 1e6;
+        for (let j = i + e.head; j < i + e.head + e.size;) {
+          const d = el(j);
+          if (d.id === 0x4489) return blob;       // it has a duration already
+          if (d.id === 0x2AD7B1) { scale = 0; for (let q = 0; q < d.size; q++) scale = scale * 256 + b[j + d.head + q]; }
+          j += d.head + d.size;
+        }
+        const size = e.size + 11; if (size >= 2 ** (7 * e.len) - 1) return blob;
+        const head = b.slice(i, i + e.head), dur = new Uint8Array(11);
+        for (let q = 0; q < e.len; q++) head[e.head - 1 - q] = Math.floor(size / 256 ** q) & 255;
+        head[e.head - e.len] |= 0x80 >> (e.len - 1);
+        dur.set([0x44, 0x89, 0x88]); new DataView(dur.buffer).setFloat64(3, ms * 1e6 / scale);
+        const end = i + e.head + e.size;
+        return new Blob([b.subarray(0, i), head, b.subarray(i + e.head, end), dur, b.subarray(end)], {type: blob.type});
+      }
+      if (unknown(e)) break;                      // a Cluster: no Info before it
+      i += e.head + e.size;
+    }
+  } catch (err) { console.warn("recording: duration not added", err); }
+  return blob;
+}
+function recNote(text) { const e = $("recnote"); e.textContent = e.title = text; }
+function recordFrame() {
+  const src = composeView(); if (src) fitInto(REC.cv, src);
+  if (REC.track) REC.track.requestFrame();
+  const t = Math.round((performance.now() - REC.t0) / 1000);
+  $("rec").textContent = `■ stop ${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
+}
+function startRecording() {
+  const fmt = recordingFormat(), src = composeView(), fps = +$("recfps").value || 10;
+  if (!fmt) { recNote("this browser can't record video (no MediaRecorder)"); return; }
+  if (!src) return;
+  const cv = REC.cv = document.createElement("canvas");             // fixed for the recording
+  const k = Math.min(1, 3840 / src.width, 2160 / src.height);       // ≤ 4K, what encoders take
+  cv.width = Math.round(src.width * k) & ~1; cv.height = Math.round(src.height * k) & ~1;   // even, for H.264
+  fitInto(cv, src);
+  let stream = cv.captureStream(0);                                 // a frame per requestFrame()
+  REC.track = stream.getVideoTracks()[0];
+  if (!REC.track.requestFrame) { REC.track.stop(); REC.track = null; stream = cv.captureStream(fps); }
+  const rec = REC.rec = new MediaRecorder(stream, {mimeType: fmt.type, videoBitsPerSecond: 8e6});
+  const d = new Date(), p2 = (n) => String(n).padStart(2, "0");
+  const take = {chunks: [], ms: 0, name: `realtime-stem_${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}_`
+    + `${p2(d.getHours())}-${p2(d.getMinutes())}-${p2(d.getSeconds())}.${fmt.ext}`};
+  REC.take = take;
+  rec.ondataavailable = (e) => { if (e.data.size) take.chunks.push(e.data); };
+  rec.onstop = async () => {
+    const blob = new Blob(take.chunks, {type: fmt.type});
+    download(fmt.ext === "mp4" ? blob : await withDuration(blob, take.ms), take.name);
+    recNote(`saved ${take.name} (${(blob.size / 1e6).toFixed(1)} MB)`);
+  };
+  REC.t0 = performance.now();
+  rec.start(1000);
+  recordFrame();
+  REC.timer = setInterval(recordFrame, 1000 / fps);
+  $("recfps").disabled = true;
+  recNote(`recording ${cv.width}×${cv.height}, ${fps} frames/s, ${fmt.ext}`);
+  document.body.classList.add("recording");
+}
+function stopRecording() {
+  clearInterval(REC.timer); REC.timer = null;
+  if (REC.take) REC.take.ms = performance.now() - REC.t0;
+  if (REC.rec && REC.rec.state !== "inactive") REC.rec.stop();
+  REC.rec = null; REC.track = null; REC.take = null;
+  $("rec").textContent = "● record"; $("recfps").disabled = false;
+  document.body.classList.remove("recording");
 }
 // ── live control of the reconstruction (run.py --viewer-port) ──────────────────
 const T = {state: null, loaded: false, timer: null, pending: {}};
@@ -814,6 +929,9 @@ function bind() {
     fetch(`state?seq=${seq}`).then((r) => r.json()).then((st) => { if (st.seq >= 0) show(st); });
   });
   on("png", "click", exportPng);
+  on("rec", "click", () => (REC.rec ? stopRecording() : startRecording()));
+  try { const v = localStorage.getItem("rs-recfps"); if (v) $("recfps").value = v; } catch (e) { /* no storage */ }
+  on("recfps", "change", () => { try { localStorage.setItem("rs-recfps", $("recfps").value); } catch (e) { /* no storage */ } });
   on("npy", "click", () => { if (!S.shown || !chan()) return; const a = document.createElement("a");
     a.href = `npy?seq=${S.shown.seq}&ch=${encodeURIComponent(chan())}`; a.click(); });
   window.addEventListener("keydown", (e) => {

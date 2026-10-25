@@ -45,6 +45,8 @@ tune the reconstruction (see [Tune it live](#tune-it-live)).
 - **Scale bars** on the image and the Fourier transform, the pass number and a progress bar.
 - **History:** pause (space) and a slider over past snapshots (`--history-mb`).
 - **Export:** one PNG of the view (image and Fourier transform), and `.npy` of the shown channel.
+- **Record:** a video of the view as the PNG shows it, at 10 frames/s by default (5–30): `.mkv`
+  (H.264) in Chrome, `.webm` in Firefox. Keep the tab visible while it records.
 - **URL presets:** e.g. `?flip=1&fft=1&lp=1` for the phase-flipped image with its Fourier
   transform, or `?cmap=inferno&view=1to1`. `?snapshot` shows one snapshot without the live
   stream.

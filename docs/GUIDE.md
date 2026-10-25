@@ -309,6 +309,13 @@ all, which would otherwise need a scan rotation.
     snapshots (`--history-mb`, 512 MB by default).
   - **Export:** one PNG of the view (the image and, if open, its Fourier transform, with scale
     bars and a caption), and `.npy` of the shown channel at full resolution.
+  - **Record:** a video of the same composition, redrawn at a fixed rate (5–30 frames/s, 10 by
+    default), through the browser's `MediaRecorder`.
+    - Format: H.264 in `.mkv` in Chrome and Edge, VP9 `.webm` in Firefox, `.mp4` in Safari. The
+      page writes the duration into the `.mkv` / `.webm`, which the browser leaves out.
+    - The frame size is fixed when recording starts. Opening the Fourier transform later
+      letterboxes the composition into that size.
+    - Keep the tab visible: browsers slow the timers of a hidden tab to about one frame a second.
 - **Links:** URL parameters preset the controls, e.g. `?flip=1&fft=1&hp=20&cmap=inferno&view=1to1`
   (`ch=<channel>` picks another channel, e.g. `coverage`). `?snapshot[=seq]` shows one snapshot
   without the live stream.
