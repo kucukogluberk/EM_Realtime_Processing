@@ -29,8 +29,8 @@ docker/Dockerfile     builds the Docker image
 examples/             live viewer, notebook, sample recording
 tools/                stream recorder, replay, simulator, detector setup, geometry calibration,
                       looping and refocusing a recording
-out_gd2o3_30mrad/     a worked example: the Gd2O3 session of 2026-10-20 (scripts, figures; data not in git)
-scripts/              installation check and demos
+sessions/             recorded sessions at the microscope, each analysed the same way (data not in git)
+scripts/              installation check, demos, the standard session analysis
 tests/                unit tests
 ```
 

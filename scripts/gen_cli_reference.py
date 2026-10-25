@@ -81,6 +81,9 @@ INTROS = {
     "bench": "Time the parallax hot path and the live readout on the available torch devices.",
     "compare": "Compare the continuous modes on a looped capture: each mode's live image part-way "
                "through each pass against the true pass images.",
+    "session": "The standard analysis of a session of recordings (`sessions/README.md`): "
+               "calibrate each recording, reconstruct it at ×1/2/4/8 and at the support and live "
+               "settings, and write the same figures and `summary.json` for every session.",
 }
 
 SHORT = {
@@ -101,6 +104,7 @@ SHORT = {
     "examples.plot_result": "plot a saved result",
     "bench": "benchmark the accumulator",
     "compare": "compare the continuous modes",
+    "session": "the standard analysis of a session of recordings",
 }
 
 
@@ -127,6 +131,11 @@ def _parsers():
     compare = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(compare)
     out.append(("compare", compare.build_parser()))
+    spec = importlib.util.spec_from_file_location(
+        "session_report", REPO / "scripts" / "session_report.py")
+    session = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(session)
+    out.append(("session", session.build_parser()))
     return out
 
 

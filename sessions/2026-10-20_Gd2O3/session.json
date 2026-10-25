@@ -1,0 +1,20 @@
+{
+  "title": "Gd₂O₃ nanoparticles, 30 mrad",
+  "date": "2026-10-20",
+  "specimen": "Gd₂O₃ (bixbyite) nanoparticles on carbon",
+  "reflections": {"222": 3.12, "400": 2.7, "440": 1.91, "622": 1.63},
+  "live_note": "as used live (the session's notes); the disk centre was left at its default",
+  "recordings": {
+    "binned": {
+      "file": "data/Gd2O3_50.6nmFOV_256x256_30mrad_-30nm_binned_10us.dstream",
+      "calibrate": "--scan 256 256 --energy 200000 --semiangle 30 --angular-sampling 1.066 --scan-sampling 1.9766 --rotation-prior 3.75",
+      "live": "--binned --scan 256 256 --energy 200000 --semiangle 30 --angular-sampling 1.066 --scan-sampling 1.9766 --defocus=-300 --rotation=3.75 --detector-layout rows,-cols"
+    },
+    "unbinned": {
+      "file": "data/Gd2O3_50.6nmFOV_256x256_30mrad_-30nm_unbinned.dstream",
+      "calibrate": "--scan 256 256 --energy 200000 --semiangle 30 --angular-sampling 0.533 --scan-sampling 1.9766 --rotation-prior 3.75",
+      "live": "--detector 192 192 --scan 256 256 --energy 200000 --semiangle 30 --angular-sampling 0.533 --scan-sampling 1.9766 --defocus=-300 --rotation=3.75 --detector-layout rows,-cols"
+    }
+  },
+  "variants": {"sub": "--subtract-frame-mean", "nodc": "--no-dc-correct"}
+}

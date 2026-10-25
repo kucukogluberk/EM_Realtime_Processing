@@ -26,6 +26,7 @@ changed recently, [CHANGELOG.md](../CHANGELOG.md).
 | [`python examples/plot_result.py`](#python-examplesplot_resultpy) | plot a saved result |
 | [`python scripts/bench_accumulator.py`](#python-scriptsbench_accumulatorpy) | benchmark the accumulator |
 | [`python scripts/compare_accumulate.py`](#python-scriptscompare_accumulatepy) | compare the continuous modes |
+| [`python scripts/session_report.py`](#python-scriptssession_reportpy) | the standard analysis of a session of recordings |
 | [demo scripts](#demo-scripts) | `run_local_demo.sh`, `run_replay_demo.sh` |
 | [notebook view](#notebook-realtime_stemstreamingnotebookliveview) | `LiveView` for Jupyter |
 
@@ -613,6 +614,31 @@ usage: python scripts/compare_accumulate.py [-h]
 | `--butterworth-order N` | `12` | Steepness of the Butterworth low/high-pass edges. |
 | `--suppress-nyquist {auto,on,off}` | `auto` | Zero the Nyquist row/column of the output (auto: on when --upsampling > 1). |
 | `--band-limit` | flag | Clamp the low-pass at the parallax band limit 2*alpha/lambda. |
+
+## `python scripts/session_report.py`
+
+The standard analysis of a session of recordings (`sessions/README.md`): calibrate each recording, reconstruct it at ×1/2/4/8 and at the support and live settings, and write the same figures and `summary.json` for every session.
+
+```text
+usage: python scripts/session_report.py [-h]
+                                        [--steps {calibrate,recon,figures} [{calibrate,recon,figures} ...]]
+                                        [--device {auto,cuda,mps,cpu}] [--python PYTHON]
+                                        session
+```
+
+**arguments**
+
+| parameter | default | description |
+|---|---|---|
+| `session` | required | A session folder holding session.json. |
+
+**general**
+
+| parameter | default | description |
+|---|---|---|
+| `--steps {calibrate,recon,figures} [{calibrate,recon,figures} ...]` | `calibrate recon figures` | Which steps to run, in this order. |
+| `--device {auto,cuda,mps,cpu}` | `auto` | Torch device for the reconstructions. |
+| `--python PYTHON` | `/Users/gvarnavides/Documents/git-repos/EM_Realtime_Processing/.venv/bin/python` | The interpreter that runs the calibration and run.py. |
 
 ## Demo scripts
 

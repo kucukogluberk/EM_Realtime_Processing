@@ -1,0 +1,9 @@
+# Out of git: the recordings and everything regenerated from them (scripts/session_report.py and
+# analysis/). In git: the READMEs, session.json, summary.json, calibration/, figures/ and analysis/.
+data/
+recon/
+figures/full/
+*.log
+# the repository ignores *.png and *.npy everywhere: keep these
+!calibration/*.png
+!figures/*.png

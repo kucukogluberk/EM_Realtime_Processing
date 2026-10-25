@@ -6,6 +6,24 @@ docker/Dockerfile .`, so the versions can be switched back and forth.
 
 ## Unreleased
 
+**Sessions: one layout and one standard analysis for every recorded session.**
+
+- **Layout:** `sessions/<date>_<specimen>/`, with `session.json` (the recordings, their
+  acquisition values, the live flags), `data/` and `recon/` (not in git), `calibration/`,
+  `figures/` and `analysis/`. It is described in `sessions/README.md`.
+- **Standard analysis:** `scripts/session_report.py <session>` produces, for each recording:
+  - the calibration, with C10 refined on the lattice;
+  - the reconstructions at ×1/2/4/8, at the support's focus and with the live flags;
+  - the same figures for every session: an overview of live, support and lattice focus with the
+    spectrum and the calibration along C10, and an upsampling series with a crop where the
+    lattice is strongest;
+  - `summary.json`.
+- **Sessions so far:**
+  - `out_gd2o3_30mrad/` is now `sessions/2026-10-20_Gd2O3/`. It was re-run with the refined
+    calibration (binned C10 −281 Å, against the fit's −316 Å), quantem included.
+  - The Au-grating session of 2026-10-23 is `sessions/2026-10-23_Au-grating/`, with its own
+    checks of the disk size, the scan step and the CTF zeros.
+
 **Continuous modes `--accumulate reset | swap`, movies with `--save-passes`, and looping a
 recording.**
 

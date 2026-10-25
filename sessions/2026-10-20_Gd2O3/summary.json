@@ -1,0 +1,142 @@
+{
+  "title": "Gd₂O₃ nanoparticles, 30 mrad",
+  "date": "2026-10-20",
+  "recordings": {
+    "binned": {
+      "file": "data/Gd2O3_50.6nmFOV_256x256_30mrad_-30nm_binned_10us.dstream",
+      "frames": 65536,
+      "acquisition": "--scan 256 256 --energy 200000 --semiangle 30 --angular-sampling 1.066 --scan-sampling 1.9766 --rotation-prior 3.75",
+      "disk": {
+        "centre_px": [
+          47.86,
+          48.41
+        ],
+        "radius_px": 28.33,
+        "radius_mrad": 30.19
+      },
+      "flip_cols": true,
+      "rotation_deg": 4.78,
+      "c12_A": 16.7,
+      "phi12_deg": -7.1,
+      "c10_shift_fit_A": -315.6,
+      "c10_A": -280.7,
+      "lattice_refinement": {
+        "used": true,
+        "gain": 1.63,
+        "band_per_A": [
+          0.253,
+          0.481
+        ]
+      },
+      "apparent_c30_um": -5.25,
+      "flags": [
+        "--binned",
+        "--scan",
+        "256",
+        "256",
+        "--energy",
+        "200000",
+        "--semiangle",
+        "30",
+        "--angular-sampling",
+        "1.066",
+        "--scan-sampling",
+        "1.9766",
+        "--defocus=-281",
+        "--rotation=4.78",
+        "--center",
+        "47.86",
+        "48.41",
+        "--flip-cols",
+        "--c12=17",
+        "--phi12=-7.1"
+      ],
+      "live_flags": "--binned --scan 256 256 --energy 200000 --semiangle 30 --angular-sampling 1.066 --scan-sampling 1.9766 --defocus=-300 --rotation=3.75 --detector-layout rows,-cols",
+      "recon": {
+        "U1": "COMPLETE",
+        "U1_nodc": "COMPLETE",
+        "U1_sub": "COMPLETE",
+        "U2": "COMPLETE",
+        "U2_nodc": "COMPLETE",
+        "U2_sub": "COMPLETE",
+        "U4": "COMPLETE",
+        "U4_fit": "COMPLETE",
+        "U4_live": "COMPLETE",
+        "U4_nodc": "COMPLETE",
+        "U4_sub": "COMPLETE",
+        "U8": "COMPLETE",
+        "U8_nodc": "COMPLETE",
+        "U8_sub": "COMPLETE"
+      }
+    },
+    "unbinned": {
+      "file": "data/Gd2O3_50.6nmFOV_256x256_30mrad_-30nm_unbinned.dstream",
+      "frames": 65536,
+      "acquisition": "--scan 256 256 --energy 200000 --semiangle 30 --angular-sampling 0.533 --scan-sampling 1.9766 --rotation-prior 3.75",
+      "disk": {
+        "centre_px": [
+          96.24,
+          97.32
+        ],
+        "radius_px": 56.57,
+        "radius_mrad": 30.15
+      },
+      "flip_cols": true,
+      "rotation_deg": 4.77,
+      "c12_A": 12.9,
+      "phi12_deg": -8.1,
+      "c10_shift_fit_A": -296.1,
+      "c10_A": -296.1,
+      "lattice_refinement": {
+        "used": true,
+        "gain": 1.0,
+        "band_per_A": [
+          0.253,
+          0.481
+        ]
+      },
+      "apparent_c30_um": -5.32,
+      "flags": [
+        "--detector",
+        "192",
+        "192",
+        "--scan",
+        "256",
+        "256",
+        "--energy",
+        "200000",
+        "--semiangle",
+        "30",
+        "--angular-sampling",
+        "0.533",
+        "--scan-sampling",
+        "1.9766",
+        "--defocus=-296",
+        "--rotation=4.77",
+        "--center",
+        "96.24",
+        "97.32",
+        "--flip-cols",
+        "--c12=13",
+        "--phi12=-8.1"
+      ],
+      "live_flags": "--detector 192 192 --scan 256 256 --energy 200000 --semiangle 30 --angular-sampling 0.533 --scan-sampling 1.9766 --defocus=-300 --rotation=3.75 --detector-layout rows,-cols",
+      "recon": {
+        "U1": "COMPLETE",
+        "U1_nodc": "COMPLETE",
+        "U1_sub": "COMPLETE",
+        "U2": "COMPLETE",
+        "U2_nodc": "COMPLETE",
+        "U2_sub": "COMPLETE",
+        "U4": "COMPLETE",
+        "U4_fit": "COMPLETE",
+        "U4_live": "COMPLETE",
+        "U4_nodc": "COMPLETE",
+        "U4_sub": "COMPLETE",
+        "U8": "COMPLETE",
+        "U8_nodc": "COMPLETE",
+        "U8_sub": "COMPLETE"
+      }
+    }
+  }
+}

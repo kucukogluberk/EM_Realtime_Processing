@@ -41,6 +41,11 @@ Three stages, each changeable on its own:
   REST API: `check`, `apply`, `arm`, `disarm`, `scan`; standard library only).
 - `scripts/check_install.sh`: the step-by-step machine check (DCU reachability and link speed,
   GPU, image, GPU copies, replays). `scripts/run_replay_demo.sh`: the no-detector demo.
+- `sessions/<date>_<specimen>/`: recorded sessions, one layout each (`sessions/README.md`):
+  `session.json` (files, acquisition values, live flags), `data/` and `recon/` (not in git),
+  `calibration/`, `figures/`, `analysis/`. `scripts/session_report.py <session>` runs the standard
+  analysis: calibration, reconstructions, figures and `summary.json`. Take a new session's
+  acquisition values from that session, never from another one.
 - `docker/Dockerfile`: builds the image (NVIDIA's pinned Holoscan base + the compiled operators).
 - `tests/`: unit tests (parallax math against a float64 reference, the stream transport, the
   runner's CLI, the C frame parser).

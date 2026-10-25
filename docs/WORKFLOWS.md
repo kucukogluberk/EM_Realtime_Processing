@@ -3,9 +3,11 @@
 How to watch the live image in a browser, measure a scan's geometry from a recording,
 reconstruct it offline, replay it as a continuous acquisition, and turn the focus knob on it for
 a demo. Every command works on a laptop without a detector or an NVIDIA GPU, using
-`--ingest python` (Apple `mps`, or `cpu`). The worked example is the Gd₂O₃ session of
-2026-10-20, in [`out_gd2o3_30mrad/`](../out_gd2o3_30mrad/README.md). Every flag is in
-[CLI.md](CLI.md); the background is in [GUIDE.md](GUIDE.md).
+`--ingest python` (Apple `mps`, or `cpu`). The worked examples are the sessions in
+[`sessions/`](../sessions/README.md): Gd₂O₃ (2026-10-20) and an Au grating (2026-10-23).
+`scripts/session_report.py` runs the standard analysis of a session (calibration,
+reconstructions, figures) in one go. Every flag is in [CLI.md](CLI.md); the background is in
+[GUIDE.md](GUIDE.md).
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install -e ".[local,viz,replay]"   # once
@@ -91,7 +93,7 @@ python -m realtime_stem.apps.run --ingest python --device mps --source scan.dstr
 - **Frame mean:** `--subtract-frame-mean` removes the amplitude contrast; the default keeps it.
 - **DC correction:** `--no-dc-correct` turns it off. It matters mid-scan and on upsampled grids.
 - **Comparing with quantem:** the Gd₂O₃ analysis does it with the same geometry
-  (`out_gd2o3_30mrad/analysis/scripts/quantem_recons.py`). quantem has no column flip, so flip
+  (`sessions/2026-10-20_Gd2O3/analysis/quantem_recons.py`). quantem has no column flip, so flip
   the frames first.
 
 ## Replay it live

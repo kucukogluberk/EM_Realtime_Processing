@@ -1,0 +1,147 @@
+{
+ "scan_step": {
+  "snapshot00377_phase_flipped.npy": {
+   "periods_out_px": [
+    6.071,
+    7.043,
+    6.887,
+    6.45,
+    6.58,
+    6.193
+   ],
+   "111_px": 7.043,
+   "200_px": 6.071,
+   "ratio": 1.16,
+   "scan_step_A": 1.3404
+  },
+  "snapshot00419_phase_flipped.npy": {
+   "periods_out_px": [
+    6.139,
+    7.031,
+    6.992,
+    7.358,
+    6.196,
+    6.462
+   ],
+   "111_px": 7.031,
+   "200_px": 6.139,
+   "ratio": 1.145,
+   "scan_step_A": 1.3341
+  },
+  "scan_step_A": 1.337
+ },
+ "ctf_zeros": {
+  "2026-10-20_Gd2O3 binned": {
+   "chi_over_pi_at_zeros": [
+    0.933,
+    1.945,
+    2.843
+   ],
+   "r": [
+    0.933,
+    0.972,
+    0.948
+   ],
+   "r_mean": 0.951,
+   "assumed": {
+    "angular_sampling": 1.066,
+    "scan_sampling": 1.9766,
+    "c10_fit": -315.6
+   }
+  },
+  "2026-10-20_Gd2O3 unbinned": {
+   "chi_over_pi_at_zeros": [
+    0.947,
+    1.924,
+    2.914
+   ],
+   "r": [
+    0.947,
+    0.962,
+    0.971
+   ],
+   "r_mean": 0.96,
+   "assumed": {
+    "angular_sampling": 0.533,
+    "scan_sampling": 1.9766,
+    "c10_fit": -296.1
+   }
+  },
+  "2026-10-23_Au-grating centered": {
+   "chi_over_pi_at_zeros": [
+    1.032,
+    2.056,
+    3.077
+   ],
+   "r": [
+    1.032,
+    1.028,
+    1.026
+   ],
+   "r_mean": 1.029,
+   "assumed": {
+    "angular_sampling": 1.066,
+    "scan_sampling": 1.341,
+    "c10_fit": -520.8
+   }
+  },
+  "2026-10-23_Au-grating not_centered": {
+   "chi_over_pi_at_zeros": [
+    1.014,
+    2.038,
+    3.073
+   ],
+   "r": [
+    1.014,
+    1.019,
+    1.024
+   ],
+   "r_mean": 1.019,
+   "assumed": {
+    "angular_sampling": 1.066,
+    "scan_sampling": 1.341,
+    "c10_fit": -460.8
+   }
+  }
+ },
+ "disk": {
+  "Gd2O3 binned (2026-10-20)": {
+   "centre_px": [
+    47.86,
+    48.41
+   ],
+   "radius_50_px": 28.12,
+   "radius_fit_disk_px": 28.33,
+   "halo_2_8_px_out": 0.019
+  },
+  "grating centered (2026-10-23)": {
+   "centre_px": [
+    47.18,
+    46.29
+   ],
+   "radius_50_px": 29.85,
+   "radius_fit_disk_px": 30.91,
+   "halo_2_8_px_out": 0.084
+  },
+  "grating not_centered (2026-10-23)": {
+   "centre_px": [
+    37.08,
+    48.08
+   ],
+   "radius_50_px": 29.96,
+   "radius_fit_disk_px": 30.69,
+   "halo_2_8_px_out": 0.071
+  },
+  "per_tile_centered": {
+   "radius_50_px": {
+    "median": 29.91,
+    "p5": 29.78,
+    "p95": 30.03
+   },
+   "centre_spread_px": [
+    1.15,
+    1.18
+   ]
+  }
+ }
+}

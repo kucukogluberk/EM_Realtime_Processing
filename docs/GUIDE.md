@@ -713,7 +713,9 @@ tools/                         .dstream CLI, stream recorders, replay feeder, np
                                geometry calibration from a recording (calibrate_parallax.py),
                                DCU setup (detector_setup.py)
 scripts/                       machine check, replay demos (Docker / local), accumulator benchmark,
-                               CLI-reference generator
+                               continuous-mode comparison, the standard session analysis
+                               (session_report.py), CLI-reference generator
+sessions/                      recorded sessions, one folder each in one layout (sessions/README.md)
 examples/                      viewer, notebook (live_view.ipynb), headless probe, static result plot
 tests/                         parallax oracle tests, readout/orientation/codec/ingest/simulator
                                tests, streaming transport tests, runner CLI tests
