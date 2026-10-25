@@ -53,9 +53,20 @@ replaces the matplotlib window as the recommended viewer.
 - **Smooth at large sizes.** The page asks only for the region it shows, at the size it shows it,
   so a 4096² snapshot is as smooth as a 512² one. Contrast, gamma and the colour map are applied
   on the GPU (WebGL2).
-- **Controls:** linked panels per channel, auto (frame or view) or manual limits with a histogram,
-  high- and low-pass filters in Å, a Fourier transform of the visible region with d-spacings, a
-  scale bar, pause and a history slider, PNG and `.npy` export, and URL presets.
+- **Controls:**
+  - **The image:** one panel, the parallax reconstruction.
+  - **Filters,** shown in the Fourier transform too:
+    - the phase flip (the pipeline's `phase_flipped` channel);
+    - high- and low-pass, σ in Å.
+  - **Fourier transform:** an optional panel of the visible square at native pixels (≤ 2048²),
+    with d-spacings, a scale bar in Å⁻¹, and an outline of its square on the image.
+  - **Contrast:** auto (frame or view) or manual limits, with a histogram whose lines can be
+    dragged. Manual starts from the limits shown.
+  - **Always on:** scale bars.
+  - **History:** pause and a history slider.
+  - **Export:** one PNG of the view (image and Fourier transform, scale bars, caption) and
+    `.npy`.
+  - **URL presets.**
 - **Dependencies:** the standard library, numpy and pyzmq; the page loads nothing from the
   internet. `examples/viewer.py` and the notebook view are unchanged.
 - **Snapshot metadata:** it now carries `sampling_A`, the output pixel size. While the image is

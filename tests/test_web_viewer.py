@@ -100,8 +100,8 @@ def test_encode_keeps_precision_at_any_level():
 def test_power_spectrum_finds_a_lattice():
     y, x = np.mgrid[:256, :256]
     img = np.cos(2 * np.pi * x / 8.0).astype(np.float32)          # 32 cycles across 256 px
-    spec, (cy, cx, n), used = power_spectrum(img, 0, 0, 256, 256, n=256)
-    assert n == 256 and spec.shape == (256, 256) and used == (0, 256)
+    spec, (cy, cx, n), used, b = power_spectrum(img, 0, 0, 256, 256, n=256)
+    assert n == 256 and b == 1 and spec.shape == (256, 256) and used == (0, 256)
     peak = np.unravel_index(np.argmax(spec), spec.shape)
     assert peak[0] == 128 and abs(peak[1] - 128) == 32
 
@@ -117,17 +117,34 @@ def test_power_spectrum_of_a_partly_scanned_image():
     def streak(s):
         return np.median(s[off_axis, 128]) - np.median(s)
 
-    whole, _, _ = power_spectrum(img, 0, 0, 256, 256, n=256)
-    spec, (cy, cx, n), used = power_spectrum(img, 0, 0, 256, 256, n=256, rows=(20, 150))
+    whole, _, _, _ = power_spectrum(img, 0, 0, 256, 256, n=256)
+    spec, (cy, cx, n), used, _ = power_spectrum(img, 0, 0, 256, 256, n=256, rows=(20, 150))
     assert (cy, n) == (0, 256) and used == (20, 150)
     assert streak(whole) > 3 and streak(spec) < 0.5
     peak = np.unravel_index(np.argmax(spec), spec.shape)
     assert peak[0] == 128 and abs(peak[1] - 128) == 32
     # a smaller square moves onto the scanned rows; none of them in view: a flat spectrum
-    _, (cy, _, _), used = power_spectrum(img, 0, 0, 256, 256, n=64, rows=(20, 150))
+    _, (cy, _, _), used, _ = power_spectrum(img, 0, 0, 256, 256, n=64, rows=(20, 150))
     assert cy == 53 and used == (53, 117)
-    spec, _, used = power_spectrum(img, 200, 0, 56, 256, n=56, rows=(20, 150))
+    spec, _, used, _ = power_spectrum(img, 200, 0, 56, 256, n=56, rows=(20, 150))
     assert np.ptp(spec) == 0 and used[1] == used[0]
+
+
+
+def test_power_spectrum_shows_the_display_filters_and_bins_large_regions():
+    rng = np.random.default_rng(5)
+    img = rng.standard_normal((512, 512)).astype(np.float32)      # white: flat spectrum
+    q = np.hypot(*np.meshgrid(np.fft.fftshift(np.fft.fftfreq(512)),
+                              np.fft.fftshift(np.fft.fftfreq(512)), indexing="ij"))
+    plain = power_spectrum(img, 0, 0, 512, 512, n=512)[0]
+    low = power_spectrum(img, 0, 0, 512, 512, n=512, lp=4.0)[0]       # σ 4 px: gone by 0.1 1/px
+    high = power_spectrum(img, 0, 0, 512, 512, n=512, hp=4.0)[0]
+    outer, inner = q > 0.25, (q > 0.005) & (q < 0.02)
+    assert low[outer].mean() < plain[outer].mean() - 5               # log10: 1e5 weaker
+    assert high[inner].mean() < plain[inner].mean() - 0.5
+    assert abs(high[outer].mean() - plain[outer].mean()) < 0.05      # untouched where it passes
+    spec, (_, _, n), _, b = power_spectrum(img, 0, 0, 512, 512, n=2048, out=128)
+    assert n == 512 and b == 4 and spec.shape == (128, 128)          # the whole q range, binned
 
 
 @pytest.fixture()
@@ -164,8 +181,9 @@ def test_endpoints(server):
     back = np.frombuffer(body, "<f2").astype(np.float64).reshape(48, 64) * float(hdr["X-Scale"]) \
         + float(hdr["X-Offset"])
     np.testing.assert_allclose(back, stack[1].reshape(48, 2, 64, 2).mean(axis=(1, 3)), atol=0.05)
-    status, hdr, body = _get(base + "/fft?ch=parallax&n=64")
+    status, hdr, body = _get(base + "/fft?ch=parallax&n=64&hp=2&lp=0.5")
     assert hdr["X-Shape"] == "64,64" and len(body) == 64 * 64 * 2 and hdr["X-Rows"] == "16,80"
+    assert hdr["X-Region"] == "16,32,64,64" and hdr["X-Bin"] == "1"
     store.put(stack, {"channels": ["parallax", "phase_flipped"], "meta": {"complete_rows": [0, 40]}})
     assert _get(base + "/fft?ch=parallax&n=64")[1]["X-Rows"] == "0,40"   # a partly scanned image
     status, hdr, body = _get(base + "/npy?ch=parallax")

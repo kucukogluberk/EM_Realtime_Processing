@@ -18,7 +18,7 @@ flags.
 
 ## Watch in a browser
 
-![The browser viewer: parallax, phase-flipped and its Fourier transform, mid-scan](images/web_viewer.jpg)
+![The browser viewer: the parallax image, phase-flipped and low-passed, and its Fourier transform](images/web_viewer.jpg)
 
 Start the viewer, subscribed to the pipeline's live stream (`run.py --live-endpoint …`), and
 open http://127.0.0.1:8050:
@@ -27,19 +27,24 @@ open http://127.0.0.1:8050:
 python -m realtime_stem.streaming.web tcp://127.0.0.1:5601
 ```
 
-- **Navigation:** one panel per channel; wheel to zoom, drag to pan, double-click or `f` to fit,
-  `1` for native pixels. Panels stay linked unless you untick "link".
-- **Contrast:** limits from the whole frame's histogram, from what is on screen, or manual;
-  gamma, colour map and invert.
-- **Display filters:** high-pass and low-pass, σ in Å.
-- **Fourier transform** of the visible region, with q and the d-spacing under the cursor. On a
-  partly scanned image (a scan's first pass, every pass of `reset`) it uses only the finished
-  rows.
-- **Scale bar,** pass number and progress bar.
+- **Navigation:** one image, the parallax reconstruction. Wheel to zoom, drag to pan,
+  double-click or `f` to fit, `1` for native pixels.
+- **Filters:** the phase flip, and high- and low-pass with σ in Å. The Fourier transform shows
+  them too.
+- **Fourier transform** (optional panel) of the visible square, with q and the d-spacing under
+  the cursor.
+  - A dashed outline on the image marks the square.
+  - On a partly scanned image (a scan's first pass, every pass of `reset`) it uses only the
+    finished rows.
+- **Contrast:** limits from the whole frame's histogram, from what is on screen, or manual.
+  - Drag the lines on the histogram to set them; manual starts from the limits shown.
+  - Gamma, colour map and invert.
+- **Scale bars** on the image and the Fourier transform, the pass number and a progress bar.
 - **History:** pause (space) and a slider over past snapshots (`--history-mb`).
-- **Export:** PNG of the views, `.npy` of the full channels.
-- **URL presets:** e.g. `?channels=phase_flipped&fft=1&lp=1` for one panel with its FFT, or
-  `?cmap=inferno&view=1to1`. `?snapshot` shows one snapshot without the live stream.
+- **Export:** one PNG of the view (image and Fourier transform), and `.npy` of the shown channel.
+- **URL presets:** e.g. `?flip=1&fft=1&lp=1` for the phase-flipped image with its Fourier
+  transform, or `?cmap=inferno&view=1to1`. `?snapshot` shows one snapshot without the live
+  stream.
 - **Another computer:** run the viewer next to the pipeline and `ssh -L 8050:127.0.0.1:8050
   <server>`. Only screen-sized images cross the network, so a 4096² image stays smooth.
 
@@ -186,5 +191,5 @@ python -m realtime_stem.apps.run --ingest python --device mps --endpoint tcp://1
 while true; do python -m tools.replay_to_zmq walk.dstream --endpoint tcp://127.0.0.1:5555 --rate 15000; done
 ```
 
-At 15 kHz each pass of 65,536 frames takes about 4 s. `?channels=phase_flipped` gives one large
+At 15 kHz each pass of 65,536 frames takes about 4 s. `?flip=1` gives one large
 panel for recording.

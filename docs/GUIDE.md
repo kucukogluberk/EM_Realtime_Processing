@@ -246,26 +246,35 @@ serves a page at http://127.0.0.1:8050.
   - The server averages blocks of pixels down to about the screen's resolution, and sends native
     pixels once zoomed in.
   - So a 4096² snapshot (a 512² scan at ×8) costs the browser about what a 512² one does.
-  - On the Mac, a full-field view of a 4096² channel takes ~50 ms to prepare, a 1024² Fourier
-    transform ~15 ms.
+  - On the Mac, a full-field view of a 4096² channel takes ~50 ms to prepare.
 - **Instant contrast.** The browser applies contrast, gamma, the colour map and invert on the GPU
   (WebGL2), so the sliders don't round-trip.
 - **Controls:**
-  - one panel per channel (linked zoom and pan; wheel / drag / double-click to fit; `f` fit, `1`
-    native pixels);
-  - limits from the whole frame's histogram, the visible view, or manual;
-  - display-only Gaussian high- and low-pass filters, in Å;
-  - a live Fourier transform of the visible region, with q and d-spacing under the cursor. While
-    the image is still filling in (a scan's first pass, every pass of `reset`) it uses only the
-    finished rows, from the snapshot's `complete_rows`. So does the frame's histogram.
-    Otherwise the blank part and the edge of the scan would dominate both;
-  - a scale bar (from the snapshot's `sampling_A`);
-  - the pass / progress line;
-  - pause (space) and a history slider over the kept snapshots (`--history-mb`, 512 MB by
-    default);
-  - PNG of the views, and `.npy` of the full channels.
-- **Links:** URL parameters preset the controls, e.g. `?cmap=inferno&fft=1&hp=20&view=1to1`.
-  `?snapshot[=seq]` shows one snapshot without the live stream.
+  - **The image:** one reconstruction panel, the parallax image by default. Wheel to zoom, drag
+    to pan, double-click or `f` to fit, `1` for native pixels. A scale bar comes from the
+    snapshot's `sampling_A`.
+  - **Filters,** applied to the image and shown in its Fourier transform too:
+    - the phase flip, sign(sin χ(q)): the pipeline's `phase_flipped` channel, computed from the
+      same parallax sum;
+    - Gaussian high- and low-pass, σ in Å (display only).
+  - **The Fourier transform panel** (optional) shows the visible square at native pixels, up to
+    2048², averaged to screen size.
+    - It shows q and the d-spacing under the cursor, and has a scale bar in Å⁻¹.
+    - A dashed outline on the image marks the square it transforms.
+    - The phase flip changes only signs, so it leaves the power spectrum as it is.
+    - While the image is still filling in (a scan's first pass, every pass of `reset`), it uses
+      only the finished rows, from the snapshot's `complete_rows`. So does the frame's
+      histogram. Otherwise the blank part and the edge of the scan would dominate both.
+  - **Contrast:** limits from the whole frame's histogram, the visible view, or manual.
+    - Manual starts from the limits shown; dragging a line on the histogram switches to manual.
+    - Gamma, colour map and invert.
+  - **Status:** the pass / progress line, pause (space), and a history slider over the kept
+    snapshots (`--history-mb`, 512 MB by default).
+  - **Export:** one PNG of the view (the image and, if open, its Fourier transform, with scale
+    bars and a caption), and `.npy` of the shown channel at full resolution.
+- **Links:** URL parameters preset the controls, e.g. `?flip=1&fft=1&hp=20&cmap=inferno&view=1to1`
+  (`ch=<channel>` picks another channel, e.g. `coverage`). `?snapshot[=seq]` shows one snapshot
+  without the live stream.
 - **Another computer:** keep the viewer next to the pipeline and forward its port
   (`ssh -L 8050:127.0.0.1:8050 <server>`): only screen-sized images travel. Or serve it with
   `--host 0.0.0.0`.

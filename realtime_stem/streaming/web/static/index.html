@@ -12,7 +12,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
              font: 13px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif; }
 body { display: grid; grid-template-columns: 300px 1fr; }
 aside { overflow-y: auto; border-right: 1px solid var(--border); padding: 8px 12px 16px; background: var(--side); }
-aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 6px; }
+aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 12px 0 4px; }
 .row { display: flex; align-items: center; gap: 6px; margin: 5px 0; }
 .row > label:first-child { flex: 1; }
 .row input[type=range] { width: 120px; }
@@ -22,24 +22,26 @@ input[type=number] { width: 84px; background: var(--field); color: var(--fg); bo
 select, button { background: var(--field); color: var(--fg); border: 1px solid var(--border); border-radius: 3px;
                  padding: 3px 7px; font: inherit; cursor: pointer; }
 button:hover, select:hover { border-color: var(--accent); }
+label.off { color: var(--muted); }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
 .muted { color: var(--muted); }
 #dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); display: inline-block; flex: none; }
 #progress { height: 6px; background: var(--field); border-radius: 3px; overflow: hidden; margin: 6px 0 2px; }
 #progress > div { height: 100%; background: var(--accent); width: 0; }
-#channels label { display: block; margin: 3px 0; }
-#hist { width: 100%; height: 64px; background: var(--field); border: 1px solid var(--border); display: block; }
+#hist { width: 100%; height: 64px; background: var(--field); border: 1px solid var(--border); display: block;
+        cursor: ew-resize; }
 main { position: relative; display: grid; gap: 6px; padding: 6px; overflow: hidden; min-height: 0; }
 .panel { position: relative; background: #000; border: 1px solid var(--border); min-height: 0; min-width: 0;
          display: flex; flex-direction: column; }
 .panel header { display: flex; justify-content: space-between; gap: 8px; padding: 2px 6px; font-size: 12px;
                 background: var(--side); color: var(--muted); white-space: nowrap; overflow: hidden; }
 .panel header .title { color: var(--fg); }
-.stage { position: relative; flex: 1; min-height: 0; cursor: crosshair; }
+.stage { position: relative; flex: 1; min-height: 0; cursor: crosshair; overflow: hidden; }
 .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .scalebar { position: absolute; left: 12px; bottom: 10px; color: #fff; font-size: 12px; pointer-events: none;
             text-shadow: 0 0 3px #000, 0 0 2px #000; }
 .scalebar div { height: 4px; background: #fff; box-shadow: 0 0 3px #000; margin-bottom: 3px; }
+.outline { position: absolute; border: 1px dashed rgba(255, 210, 80, .85); pointer-events: none; display: none; }
 #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
 .hint { color: var(--muted); font-size: 11px; margin-top: 4px; }
 </style>
@@ -47,24 +49,22 @@ main { position: relative; display: grid; gap: 6px; padding: 6px; overflow: hidd
 </head>
 <body>
 <aside>
-  <div class="row" style="margin-top:4px"><span id="dot"></span><b style="flex:1">realtime-stem live</b>
+  <div class="row" id="head" style="margin-top:4px"><span id="dot"></span><b style="flex:1">realtime-stem live</b>
     <span id="rate" class="muted mono"></span></div>
-  <div id="endpoint" class="muted mono"></div>
   <div id="progress"><div></div></div>
   <div id="metaline" class="mono"></div>
 
-  <h2>Channels</h2>
-  <div id="channels"></div>
-  <label class="row"><input type="checkbox" id="fft"> Fourier transform of
-    <select id="fftch"></select></label>
-  <div class="row"><label>FFT size</label>
-    <select id="fftn"><option>256</option><option>512</option><option selected>1024</option></select></div>
+  <h2>Image</h2>
+  <div class="row" id="baserow"><label>channel</label><select id="base"></select></div>
+  <div class="row"><label class="row" style="margin:0" title="the visible square, at native pixels; a dashed outline marks it on the image">
+    <input type="checkbox" id="fft"> Fourier transform</label>
+    <button id="fit" title="fit the image (f, or double-click)">Fit</button><button id="one" title="native pixels (1)">1:1</button></div>
 
-  <h2>View</h2>
-  <div class="row"><button id="fit">Fit (f)</button><button id="one">1:1 (1)</button>
-    <label class="row" style="margin:0"><input type="checkbox" id="link" checked> link</label></div>
-  <label class="row"><input type="checkbox" id="smooth" checked> smooth when zoomed in</label>
-  <label class="row"><input type="checkbox" id="scalebar" checked> scale bar</label>
+  <h2 title="The Fourier transform shows the filters too. The phase flip only changes signs, so it leaves the power spectrum as it is.">Filters</h2>
+  <label class="row" id="fliprow" title="sign(sin χ(q)) on the parallax sum: the pipeline's phase_flipped channel">
+    <input type="checkbox" id="flip"> phase flip</label>
+  <div class="row"><label>high-pass σ</label><input type="range" id="hp" min="0" max="200" step="1" value="0"><output id="hp_o"></output></div>
+  <div class="row"><label>low-pass σ</label><input type="range" id="lp" min="0" max="10" step="0.1" value="0"><output id="lp_o"></output></div>
 
   <h2>Contrast</h2>
   <div class="row"><label>limits from</label>
@@ -73,14 +73,10 @@ main { position: relative; display: grid; gap: 6px; padding: 6px; overflow: hidd
   <div class="row"><label>low %</label><input type="range" id="plo" min="0" max="10" step="0.05" value="0.5"><output id="plo_o"></output></div>
   <div class="row"><label>high %</label><input type="range" id="phi" min="90" max="100" step="0.05" value="99.5"><output id="phi_o"></output></div>
   <div class="row"><label>min / max</label><input type="number" id="mlo" step="any"><input type="number" id="mhi" step="any"></div>
-  <canvas id="hist"></canvas>
+  <canvas id="hist" title="drag a blue line to set the limits by hand"></canvas>
   <div class="row"><label>gamma</label><input type="range" id="gamma" min="0.25" max="3" step="0.05" value="1"><output id="gamma_o"></output></div>
   <div class="row"><label>colour map</label><select id="cmap"></select></div>
   <label class="row"><input type="checkbox" id="invert"> invert</label>
-
-  <h2>Filters (display only)</h2>
-  <div class="row"><label>high-pass σ</label><input type="range" id="hp" min="0" max="200" step="1" value="0"><output id="hp_o"></output></div>
-  <div class="row"><label>low-pass σ</label><input type="range" id="lp" min="0" max="10" step="0.1" value="0"><output id="lp_o"></output></div>
 
   <h2>History</h2>
   <label class="row"><input type="checkbox" id="pause"> pause (space)</label>
@@ -89,11 +85,9 @@ main { position: relative; display: grid; gap: 6px; padding: 6px; overflow: hidd
   <div id="histlabel" class="muted mono"></div>
 
   <h2>Save</h2>
-  <div class="row"><button id="png">PNG of the views</button><button id="npy">.npy (full)</button></div>
+  <div class="row"><button id="png" title="the image as shown, with the Fourier transform if open">PNG of the view</button>
+    <button id="npy" title="the shown channel at full resolution, without the high-/low-pass">.npy (full)</button></div>
 
-  <h2>Cursor</h2>
-  <div id="cursor" class="mono muted">–</div>
-  <div class="hint">Wheel: zoom · drag: pan · double-click: fit</div>
 </aside>
 <main id="panels"><div id="empty">waiting for a snapshot…</div></main>
 
@@ -103,11 +97,11 @@ const $ = (id) => document.getElementById(id);
 
 // ── state ────────────────────────────────────────────────────────────────────
 const S = {
-  latest: null, shown: null, paused: false, visible: {}, fft: false, fftCh: null, fftN: 1024,
-  link: true, cam: null, cmode: "frame", pLo: 0.5, pHi: 99.5, mLo: 0, mHi: 1, gamma: 1,
-  cmap: "gray", invert: false, smooth: true, scalebar: true, hpA: 0, lpA: 0, arrivals: [],
+  latest: null, shown: null, paused: false, base: null, flip: false, fft: false, cam: null,
+  cmode: "frame", pLo: 0.5, pHi: 99.5, mLo: 0, mHi: 1, gamma: 1, cmap: "gray", invert: false,
+  hpA: 0, lpA: 0, arrivals: [],
 };
-const panels = new Map();                         // channel name (or "fft") → Panel
+let IMG = null, FFT = null;                       // the reconstruction panel and the Fourier transform's
 
 // ── half floats ──────────────────────────────────────────────────────────────
 const HALF = (() => {
@@ -145,19 +139,35 @@ function lutBytes(name) {
   return out;
 }
 
+// ── channels and filters ─────────────────────────────────────────────────────
+function sampling() { const s = S.shown && S.shown.meta && S.shown.meta.sampling_A; return s ? s[1] : null; }
+function canFlip() { return !!S.shown && S.shown.names.includes("phase_flipped") && S.base === "parallax"; }
+function chan() { return S.flip && canFlip() ? "phase_flipped" : S.base; }      // the channel shown
+function filtered() { return S.hpA > 0 || S.lpA > 0; }
+function sigmasPx() { const u = sampling(); return [u ? S.hpA / u : S.hpA, u ? S.lpA / u : S.lpA]; }
+function filterText() {
+  const u = sampling() ? "Å" : "px", bits = [];
+  if (S.flip && canFlip()) bits.push("phase-flipped");
+  if (S.hpA > 0) bits.push(`high-pass ${S.hpA} ${u}`);
+  if (S.lpA > 0) bits.push(`low-pass ${S.lpA} ${u}`);
+  return bits;
+}
+
 class Panel {
-  constructor(name, kind) {
-    this.name = name; this.kind = kind;            // kind: "image" | "fft"
+  constructor(kind) {
+    this.kind = kind;                              // "image" | "fft"
     this.el = document.createElement("div");
     this.el.className = "panel";
     this.el.innerHTML = `<header><span class="title"></span><span class="info mono"></span></header>
-      <div class="stage"><canvas></canvas><div class="scalebar"></div></div>`;
-    this.el.querySelector(".title").textContent = kind === "fft" ? `FFT · ${name}` : name;
+      <div class="stage" title="wheel: zoom · drag: pan · double-click: fit"><canvas></canvas><div class="outline"></div><div class="scalebar"></div></div>`;
     $("panels").appendChild(this.el);
     this.stage = this.el.querySelector(".stage");
     this.canvas = this.el.querySelector("canvas");
     this.bar = this.el.querySelector(".scalebar");
+    this.box = this.el.querySelector(".outline");
     this.info = this.el.querySelector(".info");
+    this.titleEl = this.el.querySelector(".title");
+    this.note = "";
     const gl = this.gl = this.canvas.getContext("webgl2", {preserveDrawingBuffer: true, antialias: false});
     if (!gl) { this.stage.textContent = "WebGL2 is not available in this browser"; return; }
     const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
@@ -174,7 +184,7 @@ class Panel {
     gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     this.tex = gl.createTexture(); this.lut = gl.createTexture();
     this.setLut(kind === "fft" ? "inferno" : S.cmap);
-    this.t = null;            // what the texture holds: {key, seq, region:[y0,x0,h,w], f, shape:[h,w], off, scale, data, sorted}
+    this.t = null;      // the texture: {key, seq, region:[y0,x0,h,w], f, shape:[h,w], off, scale, data, sorted (+ fft: n, bin, source)}
     this.busy = false; this.again = false; this.cam = null;
     this.bindEvents();
     new ResizeObserver(() => this.resize()).observe(this.stage);
@@ -187,17 +197,20 @@ class Panel {
                           [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]])
       gl.texParameteri(gl.TEXTURE_2D, k, v);
   }
+  title() {
+    if (this.kind === "fft") return ["Fourier transform (power)", ...filterText()].join(" · ") + this.note;
+    return [S.base || "", ...filterText()].join(" · ");
+  }
   size() { return {cw: this.stage.clientWidth, ch: this.stage.clientHeight}; }
   resize() {
     const dpr = devicePixelRatio || 1, {cw, ch} = this.size();
     this.canvas.width = Math.max(1, Math.round(cw * dpr)); this.canvas.height = Math.max(1, Math.round(ch * dpr));
     if (this.kind === "image" && !S.cam && S.shown) fitAll();
-    if (this.kind === "fft" && this.t && !this.cam) this.cam = fitCam(this.t.shape[0], this.t.shape[1], cw, ch);
+    if (this.kind === "fft" && this.t) this.cam = fitCam(this.t.shape[0], this.t.shape[1], cw, ch);
     this.draw(); schedule();
   }
-  camera() { return this.kind === "fft" ? this.cam : (S.link ? S.cam : (this.cam || S.cam)); }
-  setCamera(c) { if (this.kind === "fft" || !S.link) this.cam = c; else S.cam = c; }
-  imageShape() { return this.kind === "fft" ? (this.t ? this.t.shape : null) : (S.shown ? S.shown.shape : null); }
+  camera() { return this.kind === "fft" ? this.cam : S.cam; }
+  setCamera(c) { if (this.kind === "fft") this.cam = c; else S.cam = c; }
   toImage(px, py) {                     // CSS px in the stage → image px
     const c = this.camera(), {cw, ch} = this.size();
     return [(px - cw / 2) / c.zoom + c.cx, (py - ch / 2) / c.zoom + c.cy];
@@ -206,21 +219,23 @@ class Panel {
     const c = this.camera(), {cw, ch} = this.size();
     return [c.cx - cw / 2 / c.zoom, c.cx + cw / 2 / c.zoom, c.cy - ch / 2 / c.zoom, c.cy + ch / 2 / c.zoom];
   }
-  limits() {                            // display limits in data units
-    const t = this.t;
-    if (this.kind === "fft") return t ? sortedPct(t.sorted, 30, 99.95) : [0, 1];
-    if (S.cmode === "manual") return [S.mLo, S.mHi];
-    const k = S.shown ? S.shown.names.indexOf(this.name) : -1;
-    if (S.cmode === "view" || S.hpA > 0 || S.lpA > 0 || k < 0 || (t && t.seq !== S.shown.seq))
+  autoLimits(mode) {                    // the limits a percentile mode gives, in data units
+    const t = this.t, st = S.shown, k = st ? st.names.indexOf(chan()) : -1;
+    if (mode === "view" || filtered() || k < 0 || !t || t.seq !== st.seq)
       return t ? sortedPct(t.sorted, S.pLo, S.pHi) : [0, 1];
-    return [histPct(S.shown.stats[k], S.pLo), histPct(S.shown.stats[k], S.pHi)];
+    return [histPct(st.stats[k], S.pLo), histPct(st.stats[k], S.pHi)];
+  }
+  limits() {
+    if (this.kind === "fft") return this.t ? sortedPct(this.t.sorted, 30, 99.95) : [0, 1];
+    return S.cmode === "manual" ? [S.mLo, S.mHi] : this.autoLimits(S.cmode);
   }
   draw() {
     const gl = this.gl; if (!gl) return;
+    this.titleEl.textContent = this.title();
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.clearColor(0.05, 0.055, 0.065, 1); gl.clear(gl.COLOR_BUFFER_BIT);
     const t = this.t, c = this.camera();
-    if (!t || !c) { this.bar.innerHTML = ""; return; }
+    if (!t || !c) { this.bar.innerHTML = ""; this.box.style.display = "none"; return; }
     const {cw, ch} = this.size(), [y0, x0, h, w] = t.region;
     const X = (x) => ((x - c.cx) * c.zoom + cw / 2) / cw * 2 - 1, Y = (y) => 1 - ((y - c.cy) * c.zoom + ch / 2) / ch * 2;
     const [lo, hi] = this.limits();
@@ -230,22 +245,19 @@ class Panel {
     gl.uniform1f(this.u.u_gamma, this.kind === "fft" ? 1 : S.gamma);
     gl.uniform1i(this.u.u_inv, this.kind === "image" && S.invert ? 1 : 0);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    const filt = (S.smooth || c.zoom * (devicePixelRatio || 1) / t.f < 1) ? gl.LINEAR : gl.NEAREST;
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filt);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.uniform1i(this.u.u_tex, 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.lut); gl.uniform1i(this.u.u_lut, 1);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    this.drawScalebar(c, cw);
-  }
-  drawScalebar(c, cw) {
-    const samp = S.shown && S.shown.meta && S.shown.meta.sampling_A;
-    if (!S.scalebar || this.kind !== "image" || !samp) { this.bar.innerHTML = ""; return; }
-    const perPx = samp[1] / c.zoom;                        // Å per CSS px
-    const target = 0.2 * cw * perPx, p10 = 10 ** Math.floor(Math.log10(target));
-    const nice = [1, 2, 5, 10].map((m) => m * p10).filter((v) => v <= target).pop() || p10;
-    const label = nice >= 10 ? `${+(nice / 10).toPrecision(3)} nm` : `${+nice.toPrecision(3)} Å`;
-    this.bar.innerHTML = `<div style="width:${(nice / perPx).toFixed(1)}px"></div>${label}`;
+    const bar = scaleBar(this, c.zoom, cw);
+    this.bar.innerHTML = bar ? `<div style="width:${bar.px.toFixed(1)}px"></div>${bar.label}` : "";
+    const box = this.kind === "image" ? fftRegion() : null;
+    if (box) {
+      const [sy, sx, n] = box;
+      Object.assign(this.box.style, {display: "block", left: `${(sx - c.cx) * c.zoom + cw / 2}px`,
+        top: `${(sy - c.cy) * c.zoom + ch / 2}px`, width: `${n * c.zoom}px`, height: `${n * c.zoom}px`});
+    } else this.box.style.display = "none";
   }
   upload(buf, hdr, key) {
     const gl = this.gl, [h, w] = hdr.shape, u16 = new Uint16Array(buf);
@@ -260,7 +272,7 @@ class Panel {
     for (let i = 0; i < data.length; i += step) if (Number.isFinite(data[i])) sample.push(data[i]);
     sample.sort((a, b) => a - b);
     this.t = {key, seq: hdr.seq, region: hdr.region, f: hdr.f, shape: hdr.shape, off: hdr.off, scale: hdr.scale,
-              data, sorted: sample};
+              data, sorted: sample, n: hdr.n, bin: hdr.bin, source: hdr.source};
   }
   valueAt(ix, iy) {
     const t = this.t; if (!t) return null;
@@ -291,25 +303,22 @@ class Panel {
       redraw(); schedule();
     });
     st.addEventListener("mousemove", (e) => this.readout(e));
-    st.addEventListener("mouseleave", () => { $("cursor").textContent = "–"; this.info.textContent = ""; });
+    st.addEventListener("mouseleave", () => { this.info.textContent = ""; });
   }
   readout(e) {
     if (!this.camera() || !this.t) return;
     const r = this.stage.getBoundingClientRect(), [ix, iy] = this.toImage(e.clientX - r.left, e.clientY - r.top);
-    const v = this.valueAt(ix, iy), samp = S.shown && S.shown.meta && S.shown.meta.sampling_A;
+    const v = this.valueAt(ix, iy), s = S.shown && S.shown.meta && S.shown.meta.sampling_A;
     let text;
     if (this.kind === "fft") {
-      const n = this.t.shape[0], du = ix - n / 2, dv = iy - n / 2;
-      if (samp) {
-        const q = Math.hypot(du / (n * samp[1]), dv / (n * samp[0]));
-        text = `q ${q.toFixed(4)} 1/Å · d ${q > 0 ? (1 / q).toFixed(3) : "∞"} Å`;
-      } else text = `q ${(Math.hypot(du, dv) / n).toFixed(4)} 1/px`;
+      const [qy, qx] = fftQ(this.t, ix, iy), q = Math.hypot(qy, qx);
+      text = s ? `q ${q.toFixed(4)} 1/Å · d ${q > 0 ? (1 / q).toFixed(3) : "∞"} Å` : `q ${q.toFixed(4)} 1/px`;
     } else {
       text = `x ${ix.toFixed(1)}, y ${iy.toFixed(1)} px` +
-        (samp ? ` (${(ix * samp[1] / 10).toFixed(2)}, ${(iy * samp[0] / 10).toFixed(2)} nm)` : "");
+        (s ? ` (${(ix * s[1] / 10).toFixed(2)}, ${(iy * s[0] / 10).toFixed(2)} nm)` : "");
     }
     if (v !== null) text += ` · ${this.kind === "fft" ? "log₁₀P" : "value"} ${fmt(v)}`;
-    this.info.textContent = text; $("cursor").textContent = `${this.name}: ${text}`;
+    this.info.textContent = text;
   }
   remove() { this.el.remove(); const ext = this.gl && this.gl.getExtension("WEBGL_lose_context"); if (ext) ext.loseContext(); }
 }
@@ -334,43 +343,50 @@ function histPct(st, p) {                         // percentile from the server'
   }
   return hi;
 }
-function sampling() { const s = S.shown && S.shown.meta && S.shown.meta.sampling_A; return s ? s[1] : null; }
+function fftQ(t, ix, iy) {                        // texture px of the FFT → (q_y, q_x) in 1/Å (1/px without a sampling)
+  const s = S.shown && S.shown.meta && S.shown.meta.sampling_A, dc = (t.n / 2 + 0.5) / t.bin;
+  return [(iy - dc) * t.bin / (t.n * (s ? s[0] : 1)), (ix - dc) * t.bin / (t.n * (s ? s[1] : 1))];
+}
+function fftRegion() { return S.fft && FFT && FFT.t && FFT.t.source ? FFT.t.source : null; }   // [y0, x0, n]
+function scaleBar(p, zoom, width) {               // {px, label}: a round length near 1/5 of `width` px
+  const u = sampling(); if (!u) return null;
+  let per;                                        // Å (image) or 1/Å (FFT) per px at this zoom
+  if (p.kind === "image") per = u / zoom;
+  else { if (!p.t || !p.t.n) return null; per = p.t.bin / (p.t.n * u) / zoom; }
+  const target = 0.2 * width * per, p10 = 10 ** Math.floor(Math.log10(target));
+  const nice = [1, 2, 5, 10].map((m) => m * p10).filter((v) => v <= target).pop() || p10;
+  const label = p.kind === "fft" ? `${+nice.toPrecision(3)} Å⁻¹`
+    : nice >= 10 ? `${+(nice / 10).toPrecision(3)} nm` : `${+nice.toPrecision(3)} Å`;
+  return {px: nice / per, label};
+}
 
 // ── panels, cameras, fetching ────────────────────────────────────────────────
-function imagePanels() { return [...panels.values()].filter((p) => p.kind === "image"); }
 function fitAll() {
-  const ref = imagePanels()[0]; if (!ref || !S.shown) return;
-  const {cw, ch} = ref.size(), [H, W] = S.shown.shape;
-  S.cam = fitCam(H, W, cw, ch); for (const p of imagePanels()) p.cam = null;
+  if (!IMG || !S.shown) return;
+  const {cw, ch} = IMG.size(), [H, W] = S.shown.shape;
+  S.cam = fitCam(H, W, cw, ch);
 }
-function oneToOne() {
-  const c = S.cam || (imagePanels()[0] && imagePanels()[0].camera()); if (!c) return;
-  S.cam = {...c, zoom: 1 / (devicePixelRatio || 1)}; for (const p of imagePanels()) p.cam = null;
-}
+function oneToOne() { const c = S.cam; if (c) S.cam = {...c, zoom: 1 / (devicePixelRatio || 1)}; }
 function layout() {
-  const want = [], st = S.shown;
-  if (st) for (const n of st.names) if (S.visible[n]) want.push([n, "image"]);
-  if (st && S.fft && S.fftCh && st.names.includes(S.fftCh)) want.push(["fft", "fft"]);
-  for (const [k, p] of panels) if (!want.some(([n]) => n === k) || (k === "fft" && p.name !== S.fftCh)) { p.remove(); panels.delete(k); }
-  for (const [n, kind] of want) if (!panels.has(n)) panels.set(n, new Panel(kind === "fft" ? S.fftCh : n, kind));
-  // keep the order of the channels, the FFT last
-  for (const [n] of want) $("panels").appendChild(panels.get(n).el);
-  const k = want.length, cols = k <= 3 ? Math.max(k, 1) : Math.ceil(Math.sqrt(k));
-  $("panels").style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
-  $("panels").style.gridTemplateRows = `repeat(${Math.ceil(k / cols) || 1}, minmax(0, 1fr))`;
-  $("empty").style.display = k ? "none" : "flex";
+  if (!S.shown) return;
+  if (!IMG) IMG = new Panel("image");
+  if (S.fft && !FFT) FFT = new Panel("fft");
+  if (!S.fft && FFT) { FFT.remove(); FFT = null; }
+  $("panels").style.gridTemplateColumns = `repeat(${FFT ? 2 : 1}, minmax(0, 1fr))`;
+  $("panels").style.gridTemplateRows = "minmax(0, 1fr)";
+  $("empty").style.display = "none";
 }
-function redraw() { for (const p of panels.values()) p.draw(); drawHist(); }
+function panelList() { return [IMG, FFT].filter(Boolean); }
+function redraw() { for (const p of panelList()) p.draw(); drawHist(); }
 let timer = null;
-function schedule() { clearTimeout(timer); timer = setTimeout(() => { for (const p of panels.values()) ensure(p); }, 60); }
+function schedule() { clearTimeout(timer); timer = setTimeout(() => { for (const p of panelList()) ensure(p); }, 60); }
 
 function ensure(p) {
   const st = S.shown; if (!st || !p.gl) return;
   if (p.kind === "fft") return ensureFft(p);
-  const c = p.camera(); if (!c) return;
-  const [H, W] = st.shape, dpr = devicePixelRatio || 1, samp = sampling();
-  const hp = samp ? S.hpA / samp : S.hpA, lp = samp ? S.lpA / samp : S.lpA;
-  const key = `${st.seq}|${hp}|${lp}`;
+  const c = p.camera(); if (!c || !chan()) return;
+  const [H, W] = st.shape, dpr = devicePixelRatio || 1, [hp, lp] = sigmasPx();
+  const key = `${st.seq}|${chan()}|${hp}|${lp}`;
   let [x0, x1, y0, y1] = p.visible();
   const need = Math.max(1, Math.floor(1 / (c.zoom * dpr)));        // image px per device px
   const t = p.t;
@@ -383,25 +399,24 @@ function ensure(p) {
   x1 = Math.min(W, Math.ceil(x1 + mx)); y1 = Math.min(H, Math.ceil(y1 + my));
   if (x1 <= x0 || y1 <= y0) return;
   const ow = Math.max(1, Math.ceil((x1 - x0) / need)), oh = Math.max(1, Math.ceil((y1 - y0) / need));
-  fetchInto(p, `view?seq=${st.seq}&ch=${encodeURIComponent(p.name)}&y0=${y0}&x0=${x0}&h=${y1 - y0}&w=${x1 - x0}` +
+  fetchInto(p, `view?seq=${st.seq}&ch=${encodeURIComponent(chan())}&y0=${y0}&x0=${x0}&h=${y1 - y0}&w=${x1 - x0}` +
                `&oh=${oh}&ow=${ow}&hp=${hp.toFixed(3)}&lp=${lp.toFixed(3)}`, key);
 }
 let fftLast = 0;
 function ensureFft(p) {
-  const st = S.shown, ref = panels.get(S.fftCh) || imagePanels()[0]; if (!st) return;
-  let region = [0, 0, st.shape[0], st.shape[1]];
-  if (ref && ref.camera()) {
-    const [x0, x1, y0, y1] = ref.visible();
-    const X0 = Math.max(0, Math.floor(x0)), Y0 = Math.max(0, Math.floor(y0));
-    region = [Y0, X0, Math.min(st.shape[0], Math.ceil(y1)) - Y0, Math.min(st.shape[1], Math.ceil(x1)) - X0];
-  }
-  const key = `${st.seq}|${region.join(",")}|${S.fftN}`;
+  const st = S.shown; if (!st || !IMG || !IMG.camera() || !chan()) return;
+  const [x0, x1, y0, y1] = IMG.visible(), [H, W] = st.shape;
+  const X0 = Math.max(0, Math.floor(x0)), Y0 = Math.max(0, Math.floor(y0));
+  const region = [Y0, X0, Math.min(H, Math.ceil(y1)) - Y0, Math.min(W, Math.ceil(x1)) - X0];
+  if (region[2] < 2 || region[3] < 2) return;
+  const [hp, lp] = sigmasPx();
+  const key = `${st.seq}|${chan()}|${region.join(",")}|${hp}|${lp}`;
   if (p.t && p.t.key === key) return;
   const wait = 400 - (performance.now() - fftLast);               // at most ~2.5 per second
   if (wait > 0) { setTimeout(() => ensure(p), wait); return; }
   fftLast = performance.now();
-  fetchInto(p, `fft?seq=${st.seq}&ch=${encodeURIComponent(S.fftCh)}&y0=${region[0]}&x0=${region[1]}` +
-               `&h=${region[2]}&w=${region[3]}&n=${S.fftN}`, key);
+  fetchInto(p, `fft?seq=${st.seq}&ch=${encodeURIComponent(chan())}&y0=${region[0]}&x0=${region[1]}` +
+               `&h=${region[2]}&w=${region[3]}&n=2048&hp=${hp.toFixed(3)}&lp=${lp.toFixed(3)}`, key);
 }
 async function fetchInto(p, url, key) {
   if (p.busy) { p.again = true; return; }
@@ -414,57 +429,64 @@ async function fetchInto(p, url, key) {
       const hdr = {seq: +H("X-Seq"), shape: H("X-Shape").split(",").map(Number), region: H("X-Region").split(",").map(Number),
                    f: +(H("X-Factor") || 1), off: +H("X-Offset"), scale: +H("X-Scale")};
       if (p.kind === "fft") {
-        hdr.source = hdr.region; hdr.region = [0, 0, hdr.shape[0], hdr.shape[1]];
+        const [cy, cx, n] = hdr.region;
+        Object.assign(hdr, {n, bin: +(H("X-Bin") || 1), source: [cy, cx, n], region: [0, 0, hdr.shape[0], hdr.shape[1]]});
         // a partly scanned image: the server used only its finished rows
-        const n = hdr.shape[0], [ra, rb] = H("X-Rows") ? H("X-Rows").split(",").map(Number) : [0, n];
-        const note = rb - ra >= n ? "" : rb > ra ? ` · rows ${ra}–${rb} (scanned)` : " · nothing scanned in view";
-        p.el.querySelector(".title").textContent = `FFT · ${p.name}${note}`;
+        const [ra, rb] = H("X-Rows") ? H("X-Rows").split(",").map(Number) : [0, n];
+        p.note = rb - ra >= n ? "" : rb > ra ? ` · rows ${ra}–${rb} (scanned)` : " · nothing scanned in view";
       }
       const fresh = p.kind === "fft" && (!p.t || p.t.shape[0] !== hdr.shape[0]);
       p.upload(await r.arrayBuffer(), hdr, key);
       if (fresh) { const {cw, ch} = p.size(); p.cam = fitCam(hdr.shape[0], hdr.shape[1], cw, ch); }
-      p.draw(); if (p === firstPanel()) drawHist();
+      redraw();
       ok = true;
     } else if (r.status === 404 && S.latest && !S.paused) { S.shown = S.latest; ok = true; }   // fell out of the history
   } catch (err) { console.warn(err); }
   p.busy = false;
   if (p.again || ok) { p.again = false; ensure(p); }      // the view may have moved, or a newer snapshot arrived
 }
-function firstPanel() { return imagePanels()[0]; }
 
 // ── the stream ───────────────────────────────────────────────────────────────
 function show(st) {
   const first = !S.shown, reshaped = S.shown && (S.shown.shape[0] !== st.shape[0] || S.shown.shape[1] !== st.shape[1]);
   S.shown = st;
-  for (const n of st.names) if (!(n in S.visible)) S.visible[n] = !S.onlyListed && n !== "coverage";
-  if (!S.fftCh || !st.names.includes(S.fftCh)) S.fftCh = st.names.includes("phase_flipped") ? "phase_flipped" : st.names[0];
-  buildChannelUI(st);
+  const bases = st.names.filter((n) => n !== "phase_flipped");
+  if (!S.base || !st.names.includes(S.base)) S.base = bases.includes("parallax") ? "parallax" : bases[0];
+  buildImageUI(st, bases);
   layout();
   if (first || reshaped || !S.cam) requestAnimationFrame(() => {
     fitAll(); if (first && URLP.get("view") === "1to1") oneToOne(); redraw(); schedule(); });
   updateMeta();
   redraw(); schedule();
 }
+function metaText(full = false) {      // the status line; `full`: everything (tooltip, PNG caption)
+  const st = S.shown; if (!st) return "";
+  const m = st.meta || {}, bits = [];
+  if ("pass" in m && (m.accumulate === "latest" || m.accumulate === "all" || m.pass > 0))
+    bits.push(full ? `pass ${m.pass + 1} at ${Math.round(100 * m.progress)}%` : `pass ${m.pass + 1}`, m.accumulate);
+  else if ("coverage" in m) bits.push(`${Math.round(100 * m.coverage)}% scanned`);
+  if ("upsampling" in m) bits.push(`×${m.upsampling}`);
+  if ("C10" in m) bits.push(`C10 ${Math.round(+m.C10)} Å`);
+  if (st.final) bits.push("final");
+  if (full) {
+    if ("frames" in m) bits.unshift(`${m.frames.toLocaleString()} frames`);
+    if ("rotation_deg" in m) bits.push(`rot ${(+m.rotation_deg).toPrecision(3)}°`);
+    bits.push(`${st.shape[0]}×${st.shape[1]}`);
+    if (m.subtract_frame_mean) bits.push("frame mean subtracted");
+  }
+  return bits.join(" · ");
+}
 function updateMeta() {
   const st = S.shown; if (!st) return;
-  const m = st.meta || {}, bits = [];
-  if ("frames" in m) bits.push(`${m.frames.toLocaleString()} frames`);
-  if ("pass" in m && (m.accumulate === "latest" || m.accumulate === "all" || m.pass > 0)) bits.push(`pass ${m.pass + 1} at ${Math.round(100 * m.progress)}% (${m.accumulate})`);
-  else if ("coverage" in m) bits.push(`${Math.round(100 * m.coverage)}% scanned`);
-  if ("C10" in m) bits.push(`C10 ${(+m.C10).toPrecision(4)} Å`);
-  if ("rotation_deg" in m) bits.push(`rot ${(+m.rotation_deg).toPrecision(3)}°`);
-  if ("upsampling" in m) bits.push(`×${m.upsampling}`);
-  bits.push(`${st.shape[0]}×${st.shape[1]}`);
-  if (m.subtract_frame_mean) bits.push("frame mean subtracted");
-  if (st.final) bits.push("final");
-  $("metaline").textContent = bits.join(" · ");
+  const m = st.meta || {};
+  $("metaline").textContent = metaText(); $("metaline").title = metaText(true);
   const prog = "progress" in m ? m.progress : ("coverage" in m ? m.coverage : 0);
   $("progress").firstElementChild.style.width = `${(100 * prog).toFixed(1)}%`;
   const hist = S.latest ? S.latest.history : [];
   $("scrub").max = Math.max(0, hist.length - 1);
   $("scrub").value = S.paused && hist.includes(st.seq) ? hist.indexOf(st.seq) : $("scrub").max;
-  $("histlabel").textContent = `showing #${st.seq}${S.paused ? " (paused)" : ""} · ${hist.length} kept, ${S.latest ? S.latest.count : 0} received`;
-  const u = sampling(); $("hp_o").textContent = u ? `${S.hpA} Å` : `${S.hpA} px`; $("lp_o").textContent = u ? `${S.lpA} Å` : `${S.lpA} px`;
+  $("histlabel").textContent = `#${st.seq} · ${hist.length} kept of ${S.latest ? S.latest.count : 0}`;
+  const u = sampling() ? "Å" : "px"; $("hp_o").textContent = `${S.hpA} ${u}`; $("lp_o").textContent = `${S.lpA} ${u}`;
 }
 function onState(st) {
   if (st.seq < 0) return;
@@ -472,23 +494,21 @@ function onState(st) {
   const now = performance.now(); S.arrivals.push(now); while (S.arrivals.length > 1 && now - S.arrivals[0] > 5000) S.arrivals.shift();
   const rate = S.arrivals.length > 1 ? (S.arrivals.length - 1) / ((now - S.arrivals[0]) / 1000) : 0;
   $("rate").textContent = `${rate.toFixed(1)} /s`;
-  $("endpoint").textContent = st.endpoint || "";
+  $("head").title = st.endpoint || "";
   if (!S.paused) show(st); else updateMeta();
 }
-// URL parameters preset the controls (e.g. ?cmap=inferno&fft=1&hp=20&view=1to1); ?snapshot[=seq]
-// shows one snapshot without the live stream (for screenshots and for links to a moment)
+// URL parameters preset the controls, e.g. ?flip=1&fft=1&hp=20&cmap=inferno&view=1to1;
+// ?snapshot[=seq] shows one snapshot without the live stream (for screenshots and for links)
 const URLP = new URLSearchParams(location.search);
 function applyParams() {
   const set = (id, v, ev = "change") => { const el = $(id); if (el.type === "checkbox") el.checked = v === "1" || v === "true";
     else el.value = v; el.dispatchEvent(new Event(ev)); };
-  for (const [k, id, ev] of [["cmap", "cmap"], ["cmode", "cmode"], ["fftn", "fftn"], ["invert", "invert"], ["link", "link"],
-                             ["smooth", "smooth"], ["scalebar", "scalebar"], ["gamma", "gamma", "input"], ["hp", "hp", "input"],
-                             ["lp", "lp", "input"], ["plo", "plo", "input"], ["phi", "phi", "input"]])
+  for (const [k, id, ev] of [["cmap", "cmap"], ["cmode", "cmode"], ["invert", "invert"],
+                             ["gamma", "gamma", "input"], ["hp", "hp", "input"], ["lp", "lp", "input"],
+                             ["plo", "plo", "input"], ["phi", "phi", "input"], ["flip", "flip"], ["fft", "fft"]])
     if (URLP.has(k)) set(id, URLP.get(k), ev || "change");
-  if (URLP.has("fftch")) S.fftCh = URLP.get("fftch");
-  if (URLP.has("fft")) set("fft", URLP.get("fft"));
-  if (URLP.has("channels")) { const want = URLP.get("channels").split(","); S.visible = {};
-    for (const n of want) S.visible[n] = true; S.onlyListed = true; }
+  if (URLP.has("ch")) S.base = URLP.get("ch");
+  if ((URLP.get("channels") || "").includes("phase_flipped")) set("flip", "1");    // the old preset
 }
 function connect() {
   if (URLP.has("snapshot")) {
@@ -506,35 +526,97 @@ function connect() {
 }
 
 // ── sidebar ──────────────────────────────────────────────────────────────────
-function buildChannelUI(st) {
-  const box = $("channels"), have = [...box.querySelectorAll("input")].map((i) => i.value);
-  if (have.join("|") === st.names.join("|")) return;
-  box.innerHTML = ""; $("fftch").innerHTML = "";
-  for (const n of st.names) {
-    const l = document.createElement("label");
-    l.innerHTML = `<input type="checkbox" value="${n}"> ${n}`;
-    const cb = l.querySelector("input"); cb.checked = !!S.visible[n];
-    cb.onchange = () => { S.visible[n] = cb.checked; layout(); redraw(); schedule(); };
-    box.appendChild(l);
-    const o = document.createElement("option"); o.value = o.textContent = n; $("fftch").appendChild(o);
+function buildImageUI(st, bases) {
+  const sel = $("base"), have = [...sel.options].map((o) => o.value);
+  if (have.join("|") !== bases.join("|")) {
+    sel.innerHTML = "";
+    for (const n of bases) { const o = document.createElement("option"); o.value = o.textContent = n; sel.appendChild(o); }
   }
-  $("fftch").value = S.fftCh;
+  sel.value = S.base;
+  $("baserow").style.display = bases.length > 1 ? "flex" : "none";
+  $("flip").disabled = !canFlip();
+  $("fliprow").classList.toggle("off", !canFlip());
+}
+let HIST = null;                                  // the histogram as drawn: {lo, hi} in data units
+function histogram() {                            // {counts, lo, hi} of what the image shows
+  const st = S.shown, k = st ? st.names.indexOf(chan()) : -1;
+  if (S.cmode !== "view" && !filtered() && k >= 0) {
+    const s = st.stats[k]; return {counts: s.hist, lo: s.hist_range[0], hi: s.hist_range[1]};
+  }
+  const t = IMG && IMG.t; if (!t || !t.sorted.length) return null;
+  const [lo, hi] = sortedPct(t.sorted, 0.05, 99.95), counts = new Array(256).fill(0);
+  for (const v of t.sorted) { const i = Math.floor((v - lo) / (hi - lo) * 256); if (i >= 0 && i < 256) counts[i]++; }
+  return {counts, lo, hi};
 }
 function drawHist() {
-  const cv = $("hist"), p = firstPanel(), st = S.shown;
-  const dpr = devicePixelRatio || 1; cv.width = cv.clientWidth * dpr; cv.height = cv.clientHeight * dpr;
+  const cv = $("hist"), dpr = devicePixelRatio || 1;
+  cv.width = cv.clientWidth * dpr; cv.height = cv.clientHeight * dpr;
   const g = cv.getContext("2d"); g.clearRect(0, 0, cv.width, cv.height);
-  if (!p || !st) return;
-  const k = st.names.indexOf(p.name); if (k < 0) return;
-  const s = st.stats[k], h = s.hist, [lo, hi] = s.hist_range, top = Math.max(...h.map((v) => Math.log1p(v)));
+  const h = IMG ? histogram() : null; HIST = h;
+  if (!h) return;
+  const top = Math.max(...h.counts.map((v) => Math.log1p(v)), 1e-9);
   g.fillStyle = "#6b7684";
-  for (let i = 0; i < h.length; i++) {
-    const y = Math.log1p(h[i]) / top * cv.height;
-    g.fillRect(i / h.length * cv.width, cv.height - y, Math.ceil(cv.width / h.length), y);
+  for (let i = 0; i < h.counts.length; i++) {
+    const y = Math.log1p(h.counts[i]) / top * cv.height;
+    g.fillRect(i / h.counts.length * cv.width, cv.height - y, Math.ceil(cv.width / h.counts.length), y);
   }
-  const [a, b] = p.limits(), X = (v) => (v - lo) / (hi - lo) * cv.width;
+  const [a, b] = IMG.limits(), X = (v) => Math.min(cv.width - dpr, Math.max(dpr, (v - h.lo) / (h.hi - h.lo) * cv.width));
   g.fillStyle = "#4fa3ff"; g.fillRect(X(a) - dpr, 0, 2 * dpr, cv.height); g.fillRect(X(b) - dpr, 0, 2 * dpr, cv.height);
-  if (S.cmode !== "manual") { $("mlo").value = +a.toPrecision(5); $("mhi").value = +b.toPrecision(5); }
+  for (const [id, v] of [["mlo", a], ["mhi", b]]) if (document.activeElement !== $(id)) $(id).value = +v.toPrecision(5);
+}
+function bindHistDrag() {
+  const cv = $("hist"); let which = null;
+  const value = (e) => { const r = cv.getBoundingClientRect(); return HIST.lo + (e.clientX - r.left) / r.width * (HIST.hi - HIST.lo); };
+  cv.addEventListener("mousedown", (e) => {
+    if (!HIST || !IMG) return;
+    const [a, b] = IMG.limits(), v = value(e);
+    [S.mLo, S.mHi] = [a, b];                      // start from what is shown
+    which = Math.abs(v - a) <= Math.abs(v - b) ? "lo" : "hi";
+    S.cmode = "manual"; $("cmode").value = "manual";
+    move(e); e.preventDefault();
+  });
+  const move = (e) => {
+    if (!which || !HIST) return;
+    const v = value(e), eps = 1e-6 * (HIST.hi - HIST.lo);
+    if (which === "lo") S.mLo = Math.min(v, S.mHi - eps); else S.mHi = Math.max(v, S.mLo + eps);
+    redraw();
+  };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", () => { which = null; });
+}
+function exportPng() {
+  const ps = panelList().filter((p) => p.t && p.camera()); if (!ps.length || !S.shown) return;
+  for (const p of ps) p.draw();
+  const dpr = devicePixelRatio || 1, gap = Math.round(8 * dpr), head = Math.round(24 * dpr);
+  const W = ps.reduce((a, p) => a + p.canvas.width, 0) + gap * (ps.length - 1);
+  const H = Math.max(...ps.map((p) => p.canvas.height));
+  const cv = document.createElement("canvas"); cv.width = W; cv.height = H + head;
+  const g = cv.getContext("2d");
+  g.fillStyle = "#101317"; g.fillRect(0, 0, W, H + head);
+  g.font = `${Math.round(12 * dpr)}px system-ui, sans-serif`; g.textBaseline = "middle"; g.fillStyle = "#d9dee4";
+  g.fillText(`realtime-stem · snapshot #${S.shown.seq} · ${metaText(true)}`, 6 * dpr, head / 2);
+  let x = 0;
+  for (const p of ps) {
+    g.drawImage(p.canvas, x, head);
+    const c = p.camera(), bar = scaleBar(p, c.zoom * dpr, p.canvas.width);
+    g.save(); g.shadowColor = "#000"; g.shadowBlur = 3 * dpr; g.fillStyle = "#fff";
+    g.fillText(p.title(), x + 8 * dpr, head + 12 * dpr);
+    if (bar) {
+      const bx = x + 12 * dpr, by = head + p.canvas.height - 12 * dpr;
+      g.fillRect(bx, by - 4 * dpr, bar.px, 4 * dpr);
+      g.fillText(bar.label, bx, by - 14 * dpr);
+    }
+    const box = p.kind === "image" ? fftRegion() : null;
+    if (box) {                                    // the Fourier transform's square
+      const [sy, sx, n] = box, z = c.zoom * dpr;
+      g.strokeStyle = "rgba(255, 210, 80, .85)"; g.setLineDash([5 * dpr, 4 * dpr]); g.lineWidth = dpr;
+      g.strokeRect(x + (sx - c.cx) * z + p.canvas.width / 2, head + (sy - c.cy) * z + p.canvas.height / 2, n * z, n * z);
+    }
+    g.restore();
+    x += p.canvas.width + gap;
+  }
+  cv.toBlob((b) => { const a = document.createElement("a"); a.href = URL.createObjectURL(b);
+    a.download = `realtime-stem_${S.shown.seq}_${chan()}${S.fft ? "_fft" : ""}.png`; a.click(); });
 }
 function bind() {
   const on = (id, ev, f) => $(id).addEventListener(ev, f);
@@ -543,21 +625,21 @@ function bind() {
   on("plo", "input", (e) => { S.pLo = +e.target.value; setOut(); redraw(); });
   on("phi", "input", (e) => { S.pHi = +e.target.value; setOut(); redraw(); });
   on("gamma", "input", (e) => { S.gamma = +e.target.value; setOut(); redraw(); });
-  on("cmode", "change", (e) => { S.cmode = e.target.value; redraw(); });
-  for (const id of ["mlo", "mhi"]) on(id, "input", () => { S.cmode = "manual"; $("cmode").value = "manual"; S.mLo = +$("mlo").value; S.mHi = +$("mhi").value; redraw(); });
-  on("cmap", "change", (e) => { S.cmap = e.target.value; for (const p of panels.values()) if (p.kind === "image") p.setLut(S.cmap); redraw(); });
+  on("cmode", "change", (e) => {
+    if (e.target.value === "manual" && S.cmode !== "manual" && IMG) [S.mLo, S.mHi] = IMG.autoLimits(S.cmode);
+    S.cmode = e.target.value; redraw();
+  });
+  for (const id of ["mlo", "mhi"]) on(id, "input", () => { S.cmode = "manual"; $("cmode").value = "manual";
+    S.mLo = +$("mlo").value; S.mHi = +$("mhi").value; redraw(); });
+  on("cmap", "change", (e) => { S.cmap = e.target.value; if (IMG) IMG.setLut(S.cmap); redraw(); });
   on("invert", "change", (e) => { S.invert = e.target.checked; redraw(); });
-  on("smooth", "change", (e) => { S.smooth = e.target.checked; redraw(); });
-  on("scalebar", "change", (e) => { S.scalebar = e.target.checked; redraw(); });
-  on("link", "change", (e) => { const c = imagePanels()[0] && imagePanels()[0].camera(); S.link = e.target.checked;
-    for (const p of imagePanels()) p.cam = S.link ? null : {...c}; if (S.link) S.cam = c; redraw(); schedule(); });
   on("fit", "click", () => { fitAll(); redraw(); schedule(); });
   on("one", "click", () => { oneToOne(); redraw(); schedule(); });
+  on("base", "change", (e) => { S.base = e.target.value; if (S.shown) buildImageUI(S.shown, [...$("base").options].map((o) => o.value)); redraw(); schedule(); });
   on("fft", "change", (e) => { S.fft = e.target.checked; layout(); redraw(); schedule(); });
-  on("fftch", "change", (e) => { S.fftCh = e.target.value; layout(); schedule(); });
-  on("fftn", "change", (e) => { S.fftN = +e.target.value; schedule(); });
-  on("hp", "input", (e) => { S.hpA = +e.target.value; updateMeta(); schedule(); });
-  on("lp", "input", (e) => { S.lpA = +e.target.value; updateMeta(); schedule(); });
+  on("flip", "change", (e) => { S.flip = e.target.checked; redraw(); schedule(); });
+  on("hp", "input", (e) => { S.hpA = +e.target.value; updateMeta(); redraw(); schedule(); });
+  on("lp", "input", (e) => { S.lpA = +e.target.value; updateMeta(); redraw(); schedule(); });
   on("pause", "change", (e) => { S.paused = e.target.checked; if (!S.paused && S.latest) show(S.latest); else updateMeta(); });
   on("live", "click", () => { S.paused = false; $("pause").checked = false; if (S.latest) show(S.latest); });
   on("scrub", "input", (e) => {
@@ -565,21 +647,16 @@ function bind() {
     S.paused = true; $("pause").checked = true;
     fetch(`state?seq=${seq}`).then((r) => r.json()).then((st) => { if (st.seq >= 0) show(st); });
   });
-  on("png", "click", () => {
-    for (const p of panels.values()) {
-      p.draw();
-      p.canvas.toBlob((b) => { const a = document.createElement("a"); a.href = URL.createObjectURL(b);
-        a.download = `snapshot${S.shown.seq}_${p.kind === "fft" ? "fft_" : ""}${p.name}.png`; a.click(); });
-    }
-  });
-  on("npy", "click", () => { for (const p of imagePanels()) { const a = document.createElement("a");
-    a.href = `npy?seq=${S.shown.seq}&ch=${encodeURIComponent(p.name)}`; a.click(); } });
+  on("png", "click", exportPng);
+  on("npy", "click", () => { if (!S.shown || !chan()) return; const a = document.createElement("a");
+    a.href = `npy?seq=${S.shown.seq}&ch=${encodeURIComponent(chan())}`; a.click(); });
   window.addEventListener("keydown", (e) => {
     if (e.target.tagName === "INPUT" && e.target.type === "number") return;
     if (e.key === " ") { e.preventDefault(); $("pause").click(); }
     if (e.key === "f") { fitAll(); redraw(); schedule(); }
     if (e.key === "1") { oneToOne(); redraw(); schedule(); }
   });
+  bindHistDrag();
   setOut();
 }
 bind();

@@ -18,8 +18,9 @@ Endpoints (all GET):
     /view            ?seq&ch&y0&x0&h&w&oh&ow[&hp&lp]: a region, block-averaged by the largest
                      integer that keeps it at least oh × ow, optionally Gaussian high/low-passed
                      (sigmas in full-resolution pixels), as float16 normalized by X-Offset/X-Scale
-    /fft             ?seq&ch&y0&x0&h&w[&n]: log10 power spectrum of the central n × n (≤ 1024)
-                     native pixels of a region, Hann-windowed, float16 like /view; of a partly
+    /fft             ?seq&ch&y0&x0&h&w[&n&hp&lp]: log10 power spectrum of the central n × n
+                     (≤ 2048) native pixels of a region, Hann-windowed, filtered like /view, averaged
+                     in X-Bin × X-Bin blocks to ≤ 1024 a side, float16 like /view; of a partly
                      scanned image, only its finished rows (X-Rows: those used)
     /npy             ?seq&ch: one channel at full resolution, as .npy
 """
@@ -183,21 +184,28 @@ def view(img: np.ndarray, y0: int, x0: int, h: int, w: int, oh: int, ow: int,
     return np.ascontiguousarray(out, dtype=np.float32), (y0, x0, h, w), f
 
 
-def power_spectrum(img: np.ndarray, y0: int, x0: int, h: int, w: int, n: int = 1024,
-                   rows: tuple[int, int] | None = None
-                   ) -> tuple[np.ndarray, tuple[int, int, int], tuple[int, int]]:
+def power_spectrum(img: np.ndarray, y0: int, x0: int, h: int, w: int, n: int = 2048,
+                   rows: tuple[int, int] | None = None, hp: float = 0.0, lp: float = 0.0,
+                   out: int = 1024
+                   ) -> tuple[np.ndarray, tuple[int, int, int], tuple[int, int], int]:
     """log10 power spectrum (fftshifted, Hann-windowed) of the central n × n native pixels of a
-    region (n even, at most the region).
+    region (n even, at most the region and 4096), high-/low-passed like /view (Gaussian sigmas `hp`
+    / `lp` in full-resolution pixels, their transfer applied to the spectrum), then averaged in
+    b × b blocks to at most `out` pixels a side: the whole q range at about the screen's
+    resolution.
 
     `rows` [r0, r1): the rows that hold a finished image when it is only partly scanned (the
     snapshot meta's `complete_rows`). The square then moves up or down within the region onto
     as many of them as it can, and the window spans only those rows, so the blank part and the
     edge of the scan leave no streak along q_y. Fewer than 8 of them in view: a flat spectrum.
-    Returns (spectrum, (y0, x0, n) of the square, (r0, r1) the rows windowed)."""
+    Returns (spectrum, (y0, x0, n) of the square, (r0, r1) the rows windowed, b). Spectrum pixel
+    (i, j) covers frequencies (i·b … i·b + b − 1 − n/2) / n cycles per pixel (and likewise j)."""
     H, W = img.shape
     y0, x0 = max(0, min(int(y0), H - 1)), max(0, min(int(x0), W - 1))
     h, w = max(2, min(int(h), H - y0)), max(2, min(int(w), W - x0))
     n = max(2, (min(int(n), h, w, 4096) // 2) * 2)
+    b = max(1, -(-n // max(int(out), 1)))
+    n = max(2 * b, (n // (2 * b)) * (2 * b))          # whole blocks, an even number of them
     cy, cx = y0 + (h - n) // 2, x0 + (w - n) // 2
     ra, rb = cy, cy + n
     if rows is not None:
@@ -208,13 +216,22 @@ def power_spectrum(img: np.ndarray, y0: int, x0: int, h: int, w: int, n: int = 1
             cy = min(max(y0, (ra + rb) // 2 - n // 2), y0 + h - n)
         ra, rb = max(ra, cy), min(rb, cy + n)
     if rb - ra < 8:
-        return np.zeros((n, n), np.float32), (cy, cx, n), (ra, max(ra, rb))
+        return np.zeros((n // b, n // b), np.float32), (cy, cx, n), (ra, max(ra, rb)), b
     sub = img[ra:rb, cx:cx + n].astype(np.float64)
     tile = np.zeros((n, n))
     tile[ra - cy:rb - cy] = (sub - sub.mean()) * np.outer(np.hanning(rb - ra), np.hanning(n))
-    p = np.fft.fftshift(np.abs(np.fft.fft2(tile)) ** 2)
+    spec = np.fft.fft2(tile)
+    if hp > 0 or lp > 0:
+        f2 = np.fft.fftfreq(n)[:, None] ** 2 + np.fft.fftfreq(n)[None, :] ** 2
+        if lp > 0:
+            spec *= np.exp(-2.0 * np.pi**2 * lp**2 * f2)
+        if hp > 0:
+            spec *= 1.0 - np.exp(-2.0 * np.pi**2 * hp**2 * f2)
+    p = np.fft.fftshift(np.abs(spec) ** 2)
+    if b > 1:
+        p = p.reshape(n // b, b, n // b, b).mean(axis=(1, 3))
     floor = p.mean() * 1e-6 + 1e-30
-    return np.log10(p + floor).astype(np.float32), (cy, cx, n), (ra, rb)
+    return np.log10(p + floor).astype(np.float32), (cy, cx, n), (ra, rb), b
 
 
 def encode(data: np.ndarray) -> tuple[bytes, float, float]:
@@ -338,12 +355,15 @@ class _Handler(BaseHTTPRequestHandler):
             return self._error(404, err)
         H, W = img.shape
         y0, x0, h, w, n = self._ints(q, "y0", "x0", "h", "w", "n", default=0)
+        hp, lp = (float(q[k][0]) if k in q else 0.0 for k in ("hp", "lp"))
         rows = (frame.header.get("meta") or {}).get("complete_rows")
-        spec, (cy, cx, n), (ra, rb) = power_spectrum(img, y0, x0, h or H, w or W, n or 1024, rows)
+        spec, (cy, cx, n), (ra, rb), b = power_spectrum(img, y0, x0, h or H, w or W, n or 2048,
+                                                        rows, hp, lp)
         body, off, scale = encode(spec)
         self._send(200, body, "application/octet-stream", {
-            "X-Seq": frame.seq, "X-Shape": f"{n},{n}", "X-Region": f"{cy},{cx},{n},{n}",
-            "X-Rows": f"{ra},{rb}", "X-Offset": repr(off), "X-Scale": repr(scale)})
+            "X-Seq": frame.seq, "X-Shape": f"{spec.shape[0]},{spec.shape[1]}",
+            "X-Region": f"{cy},{cx},{n},{n}", "X-Bin": b, "X-Rows": f"{ra},{rb}",
+            "X-Offset": repr(off), "X-Scale": repr(scale)})
 
     def _get_npy(self, url, q):
         frame, img, err = self._frame_channel(q)
