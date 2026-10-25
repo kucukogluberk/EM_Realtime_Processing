@@ -37,8 +37,8 @@ tune the reconstruction (see [Tune it live](#tune-it-live)).
 - **Fourier transform** (optional panel) of the visible square, with q and the d-spacing under
   the cursor.
   - A dashed outline on the image marks the square.
-  - On a partly scanned image (a scan's first pass, every pass of `reset`) it uses only the
-    finished rows.
+  - On a partly scanned image (a scan's first pass, every pass of `reset`, an image restarted
+    by a mode switch or a retune) it uses only the finished rows.
 - **Contrast:** limits from the whole frame's histogram, from what is on screen, or manual.
   - Drag the lines on the histogram to set them; manual starts from the limits shown.
   - Gamma, colour map and invert.

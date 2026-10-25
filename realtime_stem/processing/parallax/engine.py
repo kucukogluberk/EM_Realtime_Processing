@@ -87,6 +87,8 @@ from realtime_stem.processing.parallax.readout import Readout, ReadoutConfig
 
 __all__ = ["ParallaxGeometry", "preprocess_geometry", "ParallaxAccumulator"]
 
+_NO_ID = 2 ** 62          # "no frame yet" for the smallest-id trackers
+
 
 # ── geometry (host NumPy, ported from the streaming reference) ─────────────────
 
@@ -334,6 +336,9 @@ class ParallaxAccumulator:
         self.wrap_ids = bool(wrap_ids)
         self._id_offset = 0
         self._max_id = torch.full((), -1, dtype=torch.long, device=self.device)
+        # The smallest id deposited since the current image was last emptied (built, a pass
+        # restarted, a retune restarted it): where it began filling in, for `complete_rows`.
+        self._fill_min = torch.full((), _NO_ID, dtype=torch.long, device=self.device)
         self._store: torch.Tensor | None = None     # "latest": newest raw BF values per position
         self._store_kind: str | None = None
 
@@ -349,6 +354,7 @@ class ParallaxAccumulator:
         self._pass_closed = False
         self._front: dict | None = None
         self._row_source = self._rows_from(shifts)
+        self._sources = self._sources_from(shifts)
         self.readout_config = readout if readout is not None else ReadoutConfig()
         self._readout: Readout | None = None
 
@@ -520,6 +526,7 @@ class ParallaxAccumulator:
         if into is None:
             out, visits, bf_sum = self.out, self._visits, self._bf_sum
             self._n_frames += raw.shape[0]
+            self._fill_min = torch.minimum(self._fill_min, idx.min())
         else:
             out, visits, bf_sum = into["out"], into["visits"], into["bf_sum"]
             into["n"] += raw.shape[0]
@@ -563,6 +570,16 @@ class ParallaxAccumulator:
         src = (y - dys[None, :]) % self._nyu
         return np.where(src % self._u == 0, src // self._u, -1).max(axis=1)
 
+    def _sources_from(self, shifts: np.ndarray) -> np.ndarray:
+        """(output rows, scan rows) bool: which scan rows' shifted deposits land on each output
+        row, the torus wrap included."""
+        dys = np.unique(np.asarray(shifts)[:, 0])
+        src = (np.arange(self._nyu)[:, None] - dys[None, :]) % self._nyu
+        y, k = np.nonzero(src % self._u == 0)
+        m = np.zeros((self._nyu, self.scan_shape[0]), dtype=bool)
+        m[y, src[y, k] // self._u] = True
+        return m
+
     def set_geometry(self, geometry: ParallaxGeometry, chunk: int = 4096) -> str:
         """Re-shift with another geometry while running: new C10, C12 or rotation, with the same
         bright-field pixels and output grid. "latest" re-deposits every frame it holds, so the
@@ -578,6 +595,7 @@ class ParallaxAccumulator:
         self._sy = torch.as_tensor(shifts[:, 0], dtype=torch.long, device=self.device)
         self._sx = torch.as_tensor(shifts[:, 1], dtype=torch.long, device=self.device)
         self._row_source = self._rows_from(shifts)
+        self._sources = self._sources_from(shifts)
         self._readout = None                                   # χ of the phase flip
         self.out.zero_()
         if self.accumulate == "latest" and self._store is not None:
@@ -588,6 +606,7 @@ class ParallaxAccumulator:
         self._visits.zero_()
         self._bf_sum.zero_()
         self._n_frames = 0
+        self._fill_min.fill_(_NO_ID)
         self._front = None
         return "restarted the image (only --accumulate latest keeps the frames to re-render)"
 
@@ -622,6 +641,7 @@ class ParallaxAccumulator:
             self._visits.zero_()
             self._bf_sum.zero_()
             self._n_frames = 0
+            self._fill_min.fill_(_NO_ID)
         self._pass_closed = True
         self.passes_completed += 1
         if self.on_pass_complete is not None:
@@ -677,25 +697,25 @@ class ParallaxAccumulator:
 
     def complete_rows(self) -> list[int] | None:
         """[r0, r1): the output rows of the live image that hold a finished image while it fills
-        in from empty (a scan's first pass, and every pass of "reset"), i.e. the longest run of
-        rows that every scan row depositing there has reached (`_row_source`; the torus wrap
-        keeps the top rows open until the pass ends). The rest is blank or partly deposited.
-        None once every row is complete ("swap" shows the last completed pass on the others)."""
-        max_id = int(self._max_id)
-        if max_id < 0:
+        in from empty, i.e. the longest run of rows whose depositing scan rows (`_sources`, the
+        torus wrap included) have all been received since the image was emptied. That is a
+        scan's first pass, every pass of "reset", and any image started mid-run: a mode switched
+        to, or restarted by a retune. The rest is blank or partly deposited. None once every row
+        is complete ("swap" shows the last completed pass on the others)."""
+        if self._front is not None and (self.accumulate == "swap" or self._n_frames == 0):
+            return None
+        max_id, start = int(self._max_id), int(self._fill_min)
+        if max_id < 0 or start > max_id:
             return [0, 0]
-        if self._front is not None:
-            if self.accumulate == "swap" or self._n_frames == 0:
-                return None
-            rows = self._rows_done()
-        elif max_id >= self.n_positions:
+        span = max_id - start + 1                    # positions since the first, in raster order
+        if span >= self.n_positions:
             return None
-        else:
-            rows = (max_id + 1) // self._nx
-        if rows * self._nx >= self.n_positions:
+        nx = self._nx
+        covered = (np.arange(self.scan_shape[0]) * nx - start) % self.n_positions + nx <= span
+        done = ~(self._sources & ~covered[None, :]).any(axis=1)
+        if done.all():
             return None
-        done = np.concatenate(([0], (self._row_source < rows).astype(np.int8), [0]))
-        edges = np.flatnonzero(np.diff(done))
+        edges = np.flatnonzero(np.diff(np.concatenate(([0], done.astype(np.int8), [0]))))
         if edges.size == 0:
             return [0, 0]
         starts, ends = edges[::2], edges[1::2]

@@ -299,7 +299,8 @@ all, which would otherwise need a scan rotation.
     - It shows q and the d-spacing under the cursor, and has a scale bar in Å⁻¹.
     - A dashed outline on the image marks the square it transforms.
     - The phase flip changes only signs, so it leaves the power spectrum as it is.
-    - While the image is still filling in (a scan's first pass, every pass of `reset`), it uses
+    - While the image is still filling in (a scan's first pass, every pass of `reset`, an image
+      restarted mid-run by a mode switch or a retune), it uses
       only the finished rows, from the snapshot's `complete_rows`. So does the frame's
       histogram. Otherwise the blank part and the edge of the scan would dominate both.
   - **Contrast:** limits from the whole frame's histogram, the visible view, or manual.

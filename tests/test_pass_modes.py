@@ -37,11 +37,11 @@ _FLAGS = ["--detector", "32", "32", "--scan", *map(str, _SCAN), "--energy", "300
           "--defocus=-1.5e4", "--rotation=-15", "--center", "16", "16"]
 
 
-def _geometry(upsampling_factor=1):
+def _geometry(upsampling_factor=1, c10=-1.5e4):
     return preprocess_geometry(
         det_shape=(32, 32), scan_shape=_SCAN, scan_sampling=(256 / 12, 256 / 12), energy=300e3,
         semiangle_cutoff=4.0, angular_sampling=(0.307617, 0.307617),
-        aberration_coefs={"C10": -1.5e4}, rotation_angle=np.deg2rad(-15),
+        aberration_coefs={"C10": c10}, rotation_angle=np.deg2rad(-15),
         upsampling_factor=upsampling_factor)
 
 
@@ -191,6 +191,39 @@ def test_complete_rows_in_the_continuous_modes(mode):
     acc.process(frames[cut:_NPOS + cut], np.arange(cut, _NPOS + cut))
     # on the next pass "reset" fills in again; "swap" and "latest" show a whole image
     assert acc.complete_rows() == (first if mode == "reset" else None)
+
+
+@pytest.mark.parametrize("mode", ["swap", "reset", "all", "latest"])
+def test_complete_rows_of_an_image_started_mid_run(mode):
+    """A mode switched to mid-run gets a new accumulator whose first ids are passes past the
+    scan, here also mid-pass: it fills in from there, and only the rows it has completed count."""
+    geo = _geometry()
+    frames = _passes(1, seed=19)
+    full = _pass_ref(geo, frames, 0).result()
+    a, b = 3 * _SCAN[1] + 2, 11 * _SCAN[1] + 5            # scan rows 4–10 whole
+    acc = ParallaxAccumulator(geo, device="cpu", accumulate=mode, wrap_ids=True)
+    acc.process(frames[a:b], 3 * _NPOS + np.arange(a, b))
+    r0, r1 = acc.complete_rows()
+    assert 0 < r1 - r0 < full.shape[0]
+    _close(acc.result()[r0:r1], full[r0:r1])
+    for r in (r0 - 1, r1):
+        if 0 <= r < full.shape[0]:
+            assert not np.allclose(acc.result()[r], full[r])
+
+
+@pytest.mark.parametrize("mode", ["swap", "all"])
+def test_complete_rows_after_a_retune_restarts_the_image(mode):
+    geo, new = _geometry(), _geometry(c10=-1.2e4)
+    frames = _passes(2, seed=20)
+    acc = ParallaxAccumulator(geo, device="cpu", accumulate=mode, wrap_ids=True)
+    acc.process(frames[:_NPOS + 4 * _SCAN[1]], np.arange(_NPOS + 4 * _SCAN[1]))   # a pass and a bit
+    acc.set_geometry(new)                                     # the image restarts
+    a, b = _NPOS + 4 * _SCAN[1], _NPOS + 11 * _SCAN[1] + 3   # scan rows 4–10 whole, after the restart
+    acc.process(frames[a:b], np.arange(a, b))
+    r0, r1 = acc.complete_rows()
+    full = _pass_ref(new, frames, 1).result()
+    assert 0 < r1 - r0 < full.shape[0]
+    _close(acc.result()[r0:r1], full[r0:r1])
 
 
 @pytest.mark.parametrize("mode", ["latest", "all"])
