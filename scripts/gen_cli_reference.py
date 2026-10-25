@@ -147,6 +147,8 @@ def _default(action) -> str:
     if isinstance(action, (argparse._StoreTrueAction, argparse._StoreFalseAction)):
         return "flag"
     d = action.default
+    if d == sys.executable:                  # machine-specific: keep the reference the same everywhere
+        return "the Python running it"
     if d is None or d is argparse.SUPPRESS or (action.required and d is None):
         return "required" if action.required else ""
     if isinstance(d, (list, tuple)):

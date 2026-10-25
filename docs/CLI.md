@@ -641,7 +641,7 @@ usage: python scripts/session_report.py [-h]
 |---|---|---|
 | `--steps {calibrate,recon,figures} [{calibrate,recon,figures} ...]` | `calibrate recon figures` | Which steps to run, in this order. |
 | `--device {auto,cuda,mps,cpu}` | `auto` | Torch device for the reconstructions. |
-| `--python PYTHON` | `/Users/gvarnavides/Documents/git-repos/EM_Realtime_Processing/.venv/bin/python` | The interpreter that runs the calibration and run.py. |
+| `--python PYTHON` | the Python running it | The interpreter that runs the calibration and run.py. |
 
 ## Demo scripts
 
