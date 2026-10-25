@@ -6,12 +6,15 @@ docker/Dockerfile .`, so the versions can be switched back and forth.
 
 ## Unreleased
 
-**Record the viewer.** Save → "● record" writes a video of the view as the PNG export composes
-it: the image, the Fourier transform if open, scale bars, cutoff circles and the caption.
+**Record the viewer.** Save → "● record" writes a video in one of two kinds.
 
-- **Rate:** fixed, 10 frames/s by default, 5–30 in a dropdown.
+- **page** (the default): the whole page with its controls, through the browser's tab capture,
+  e.g. a supplementary video of tuning a reconstruction. The browser asks to share the tab.
+- **view:** the composition of the PNG export, redrawn at a fixed rate: the image, the Fourier
+  transform if open, scale bars, cutoff circles and the caption.
+- **Rate:** 15 frames/s by default, 5–30 in a dropdown.
 - **Format:** H.264 `.mkv` in Chrome and Edge, VP9 `.webm` in Firefox, `.mp4` in Safari.
-  - A 6 s recording at 1286×802 is about 2 MB.
+  - A 6 s recording of the view at 1286×802 is about 2 MB.
   - The page adds the duration that `MediaRecorder` leaves out, so players show the length and
     can seek.
 

@@ -309,13 +309,19 @@ all, which would otherwise need a scan rotation.
     snapshots (`--history-mb`, 512 MB by default).
   - **Export:** one PNG of the view (the image and, if open, its Fourier transform, with scale
     bars and a caption), and `.npy` of the shown channel at full resolution.
-  - **Record:** a video of the same composition, redrawn at a fixed rate (5–30 frames/s, 10 by
-    default), through the browser's `MediaRecorder`.
-    - Format: H.264 in `.mkv` in Chrome and Edge, VP9 `.webm` in Firefox, `.mp4` in Safari. The
-      page writes the duration into the `.mkv` / `.webm`, which the browser leaves out.
-    - The frame size is fixed when recording starts. Opening the Fourier transform later
-      letterboxes the composition into that size.
-    - Keep the tab visible: browsers slow the timers of a hidden tab to about one frame a second.
+  - **Record:** a video, 15 frames/s by default (5–30), through the browser's `MediaRecorder`.
+    - **page** (the default): the whole page with its controls, e.g. a supplementary video of
+      the tuning. The browser asks once per recording to share this tab, and records the page as
+      shown, at its own pixel size (up to 4K).
+      - Screen capture needs a secure page: `http://127.0.0.1` or `localhost`, also through
+        `ssh -L`. Elsewhere only "view" is offered.
+      - Ending the share from the browser's bar also stops the recording.
+    - **view:** the same composition as the PNG, redrawn at the chosen rate.
+      - The frame size is fixed when recording starts. Opening the Fourier transform later
+        letterboxes the composition into that size.
+      - Keep the tab visible: browsers slow the timers of a hidden tab to about once a second.
+    - **Format:** H.264 in `.mkv` in Chrome and Edge, VP9 `.webm` in Firefox, `.mp4` in Safari.
+      The page writes the duration into the `.mkv` / `.webm`, which the browser leaves out.
 - **Links:** URL parameters preset the controls, e.g. `?flip=1&fft=1&hp=20&cmap=inferno&view=1to1`
   (`ch=<channel>` picks another channel, e.g. `coverage`). `?snapshot[=seq]` shows one snapshot
   without the live stream.

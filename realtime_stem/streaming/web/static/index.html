@@ -114,9 +114,11 @@ body.recording #rec { border-color: var(--bad); color: var(--bad); }
   <details id="sec-save"><summary>Save</summary>
     <div class="row"><button id="png" title="the image as shown, with the Fourier transform if open">PNG of the view</button>
       <button id="npy" title="the shown channel at full resolution, without the high-/low-pass">.npy (full)</button></div>
-    <div class="row"><button id="rec" title="a video of the view as the PNG shows it (image, Fourier transform, scale bars, caption); .mkv (H.264) in Chrome, .webm in Firefox">● record</button>
+    <div class="row"><button id="rec" title="a video: .mkv (H.264) in Chrome, .webm in Firefox">● record</button>
+      <select id="recwhat" title="view: the image and Fourier transform as the PNG shows them; page: the whole page with its controls (the browser asks to share this tab)">
+        <option value="page" selected>page</option><option value="view">view</option></select>
       <select id="recfps" title="frames per second of the video">
-        <option value="5">5 fps</option><option value="10" selected>10 fps</option><option value="15">15 fps</option>
+        <option value="5">5 fps</option><option value="10">10 fps</option><option value="15" selected>15 fps</option>
         <option value="20">20 fps</option><option value="30">30 fps</option></select></div>
     <div id="recnote" class="muted"></div>
   </details>
@@ -739,8 +741,9 @@ function exportPng() {
   cv.toBlob((b) => download(b, `realtime-stem_${S.shown.seq}_${chan()}${S.fft ? "_fft" : ""}.png`));
 }
 
-// ── recording the view: the composition above at a fixed rate (10 frames/s), through MediaRecorder ──
-const REC = {rec: null, timer: null, t0: 0, cv: null, track: null};
+// ── recording: the whole page through the browser's tab capture, or the composition above at
+//    a fixed rate; either through MediaRecorder (15 frames/s by default) ──
+const REC = {rec: null, timer: null, t0: 0, cv: null, track: null, stream: null, take: null, starting: false};
 function recordingFormat() {                      // the first container/codec this browser records
   for (const [type, ext] of [["video/x-matroska;codecs=avc1", "mkv"], ["video/webm;codecs=vp9", "webm"],
                              ["video/webm;codecs=vp8", "webm"], ["video/webm", "webm"], ["video/mp4", "mp4"]])
@@ -793,26 +796,55 @@ async function withDuration(blob, ms) {
   return blob;
 }
 function recNote(text) { const e = $("recnote"); e.textContent = e.title = text; }
-function recordFrame() {
-  const src = composeView(); if (src) fitInto(REC.cv, src);
-  if (REC.track) REC.track.requestFrame();
+function recClock() {
   const t = Math.round((performance.now() - REC.t0) / 1000);
   $("rec").textContent = `■ stop ${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
 }
-function startRecording() {
-  const fmt = recordingFormat(), src = composeView(), fps = +$("recfps").value || 10;
-  if (!fmt) { recNote("this browser can't record video (no MediaRecorder)"); return; }
-  if (!src) return;
-  const cv = REC.cv = document.createElement("canvas");             // fixed for the recording
+function recordFrame() {
+  const src = composeView(); if (src) fitInto(REC.cv, src);
+  if (REC.track) REC.track.requestFrame();
+  recClock();
+}
+function viewStream(fps) {                        // the composition, redrawn into a fixed-size canvas
+  const src = composeView(); if (!src) return null;
+  const cv = REC.cv = document.createElement("canvas");
   const k = Math.min(1, 3840 / src.width, 2160 / src.height);       // ≤ 4K, what encoders take
   cv.width = Math.round(src.width * k) & ~1; cv.height = Math.round(src.height * k) & ~1;   // even, for H.264
   fitInto(cv, src);
   let stream = cv.captureStream(0);                                 // a frame per requestFrame()
   REC.track = stream.getVideoTracks()[0];
   if (!REC.track.requestFrame) { REC.track.stop(); REC.track = null; stream = cv.captureStream(fps); }
-  const rec = REC.rec = new MediaRecorder(stream, {mimeType: fmt.type, videoBitsPerSecond: 8e6});
+  return {stream, size: `${cv.width}×${cv.height}`, tick: recordFrame};
+}
+async function pageStream(fps) {                  // the page with its controls: the browser's tab capture
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+    recNote("recording the page needs screen capture, which browsers allow only on 127.0.0.1 or localhost (also through ssh -L)");
+    return null;
+  }
+  let stream;
+  try {
+    const dpr = devicePixelRatio || 1, k = Math.min(dpr, 3840 / innerWidth, 2160 / innerHeight);   // the page's own pixels, ≤ 4K
+    const video = {frameRate: {ideal: fps, max: fps}, width: {ideal: Math.round(innerWidth * k)},
+                   height: {ideal: Math.round(innerHeight * k)}};      // without these Chrome sends 800 px wide
+    stream = await navigator.mediaDevices.getDisplayMedia({video, audio: false,
+      preferCurrentTab: true, selfBrowserSurface: "include", surfaceSwitching: "exclude"});
+  } catch (e) { recNote(e.name === "NotAllowedError" ? "not recording: sharing was declined" : `not recording: ${e.message}`); return null; }
+  const track = stream.getVideoTracks()[0], st = track.getSettings();
+  track.addEventListener("ended", stopRecording);                  // the browser's "stop sharing"
+  return {stream, size: `${st.width}×${st.height}`, tick: recClock};
+}
+async function startRecording() {
+  const fmt = recordingFormat(), fps = +$("recfps").value || 15, what = $("recwhat").value;
+  if (!fmt) { recNote("this browser can't record video (no MediaRecorder)"); return; }
+  if (REC.starting) return;
+  REC.starting = true;
+  const src = await (what === "page" ? pageStream(fps) : viewStream(fps));
+  REC.starting = false;
+  if (!src) return;
+  const rec = REC.rec = new MediaRecorder(src.stream, {mimeType: fmt.type, videoBitsPerSecond: 8e6});
+  REC.stream = src.stream;
   const d = new Date(), p2 = (n) => String(n).padStart(2, "0");
-  const take = {chunks: [], ms: 0, name: `realtime-stem_${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}_`
+  const take = {chunks: [], ms: 0, name: `realtime-stem_${what}_${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}_`
     + `${p2(d.getHours())}-${p2(d.getMinutes())}-${p2(d.getSeconds())}.${fmt.ext}`};
   REC.take = take;
   rec.ondataavailable = (e) => { if (e.data.size) take.chunks.push(e.data); };
@@ -823,18 +855,19 @@ function startRecording() {
   };
   REC.t0 = performance.now();
   rec.start(1000);
-  recordFrame();
-  REC.timer = setInterval(recordFrame, 1000 / fps);
-  $("recfps").disabled = true;
-  recNote(`recording ${cv.width}×${cv.height}, ${fps} frames/s, ${fmt.ext}`);
+  src.tick();
+  REC.timer = setInterval(src.tick, what === "page" ? 500 : 1000 / fps);
+  $("recfps").disabled = $("recwhat").disabled = true;
+  recNote(`recording the ${what}, ${src.size}, ${fps} frames/s, ${fmt.ext}`);
   document.body.classList.add("recording");
 }
 function stopRecording() {
   clearInterval(REC.timer); REC.timer = null;
   if (REC.take) REC.take.ms = performance.now() - REC.t0;
   if (REC.rec && REC.rec.state !== "inactive") REC.rec.stop();
-  REC.rec = null; REC.track = null; REC.take = null;
-  $("rec").textContent = "● record"; $("recfps").disabled = false;
+  if (REC.stream) REC.stream.getTracks().forEach((t) => t.stop());  // ends the tab capture too
+  REC.rec = null; REC.track = null; REC.take = null; REC.stream = null;
+  $("rec").textContent = "● record"; $("recfps").disabled = $("recwhat").disabled = false;
   document.body.classList.remove("recording");
 }
 // ── live control of the reconstruction (run.py --viewer-port) ──────────────────
@@ -930,8 +963,14 @@ function bind() {
   });
   on("png", "click", exportPng);
   on("rec", "click", () => (REC.rec ? stopRecording() : startRecording()));
-  try { const v = localStorage.getItem("rs-recfps"); if (v) $("recfps").value = v; } catch (e) { /* no storage */ }
-  on("recfps", "change", () => { try { localStorage.setItem("rs-recfps", $("recfps").value); } catch (e) { /* no storage */ } });
+  if (!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)) {   // no tab capture here
+    $("recwhat").querySelector('option[value="page"]').disabled = true; $("recwhat").value = "view";
+  }
+  for (const id of ["recfps", "recwhat"]) {
+    try { const v = localStorage.getItem(`rs-${id}`), o = v && $(id).querySelector(`option[value="${v}"]`);
+      if (o && !o.disabled) $(id).value = v; } catch (e) { /* no storage */ }
+    on(id, "change", () => { try { localStorage.setItem(`rs-${id}`, $(id).value); } catch (e) { /* no storage */ } });
+  }
   on("npy", "click", () => { if (!S.shown || !chan()) return; const a = document.createElement("a");
     a.href = `npy?seq=${S.shown.seq}&ch=${encodeURIComponent(chan())}`; a.click(); });
   window.addEventListener("keydown", (e) => {
