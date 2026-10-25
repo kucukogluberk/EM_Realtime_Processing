@@ -32,3 +32,6 @@ realtime-stem = "realtime_stem.apps.run:main"
 
 [tool.setuptools.packages.find]
 include = ["realtime_stem*"]
+
+[tool.setuptools.package-data]
+"realtime_stem.streaming.web" = ["static/*"]   # the browser viewer's page

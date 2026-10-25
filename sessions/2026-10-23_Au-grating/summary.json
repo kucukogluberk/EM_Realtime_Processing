@@ -1,0 +1,124 @@
+{
+  "title": "Au diffraction grating, 30 mrad (nominal)",
+  "date": "2026-10-23",
+  "recordings": {
+    "centered": {
+      "file": "data/Initial_test_A1/Gd2O3_17.9nmFOV_128x128_30mrad_-43nm_binned_10us.dstream",
+      "frames": 16384,
+      "acquisition": "--scan 128 128 --energy 200000 --semiangle 31.9 --angular-sampling 1.066 --scan-sampling 1.341 --rotation-prior 4.78",
+      "disk": {
+        "centre_px": [
+          47.18,
+          46.29
+        ],
+        "radius_px": 30.91,
+        "radius_mrad": 32.95
+      },
+      "flip_cols": true,
+      "rotation_deg": 4.72,
+      "c12_A": 24.4,
+      "phi12_deg": 47.6,
+      "c10_shift_fit_A": -520.8,
+      "c10_A": -385.2,
+      "lattice_refinement": {
+        "used": true,
+        "gain": 31.78,
+        "band_per_A": [
+          0.373,
+          0.708
+        ]
+      },
+      "apparent_c30_um": 4.81,
+      "flags": [
+        "--binned",
+        "--scan",
+        "128",
+        "128",
+        "--energy",
+        "200000",
+        "--semiangle",
+        "31.9",
+        "--angular-sampling",
+        "1.066",
+        "--scan-sampling",
+        "1.341",
+        "--defocus=-385",
+        "--rotation=4.72",
+        "--center",
+        "47.18",
+        "46.29",
+        "--flip-cols",
+        "--c12=24",
+        "--phi12=47.6"
+      ],
+      "live_flags": "--binned --scan 128 128 --energy 200000 --semiangle 30 --angular-sampling 1.066 --scan-sampling 1.3984 --defocus=-430 --rotation=4.78 --center 47.86 48.41 --flip-cols --c12=17 --phi12=-7.1",
+      "recon": {
+        "U1": "COMPLETE",
+        "U2": "COMPLETE",
+        "U4": "COMPLETE",
+        "U4_fit": "COMPLETE",
+        "U4_live": "COMPLETE",
+        "U8": "COMPLETE"
+      }
+    },
+    "not_centered": {
+      "file": "data/Initial_test_A1/not_centered_Gd2O3_17.9nmFOV_128x128_30mrad_-43nm_binned_10us.dstream",
+      "frames": 16384,
+      "acquisition": "--scan 128 128 --energy 200000 --semiangle 31.9 --angular-sampling 1.066 --scan-sampling 1.341 --rotation-prior 4.78",
+      "disk": {
+        "centre_px": [
+          37.08,
+          48.08
+        ],
+        "radius_px": 30.69,
+        "radius_mrad": 32.71
+      },
+      "flip_cols": true,
+      "rotation_deg": 5.04,
+      "c12_A": 17.5,
+      "phi12_deg": 26.9,
+      "c10_shift_fit_A": -460.8,
+      "c10_A": -313.0,
+      "lattice_refinement": {
+        "used": true,
+        "gain": 23.82,
+        "band_per_A": [
+          0.373,
+          0.708
+        ]
+      },
+      "apparent_c30_um": 4.73,
+      "flags": [
+        "--binned",
+        "--scan",
+        "128",
+        "128",
+        "--energy",
+        "200000",
+        "--semiangle",
+        "31.9",
+        "--angular-sampling",
+        "1.066",
+        "--scan-sampling",
+        "1.341",
+        "--defocus=-313",
+        "--rotation=5.04",
+        "--center",
+        "37.08",
+        "48.08",
+        "--flip-cols",
+        "--c12=17",
+        "--phi12=26.9"
+      ],
+      "live_flags": "--binned --scan 128 128 --energy 200000 --semiangle 30 --angular-sampling 1.066 --scan-sampling 1.3984 --defocus=-430 --rotation=4.78 --center 47.86 48.41 --flip-cols --c12=17 --phi12=-7.1",
+      "recon": {
+        "U1": "COMPLETE",
+        "U2": "COMPLETE",
+        "U4": "COMPLETE",
+        "U4_fit": "COMPLETE",
+        "U4_live": "COMPLETE",
+        "U8": "COMPLETE"
+      }
+    }
+  }
+}

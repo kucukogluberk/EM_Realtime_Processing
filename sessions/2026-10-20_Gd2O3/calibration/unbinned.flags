@@ -1,0 +1,1 @@
+--detector 192 192 --scan 256 256 --energy 200000 --semiangle 30 --angular-sampling 0.533 --scan-sampling 1.9766 --defocus=-296 --rotation=4.77 --center 96.24 97.32 --flip-cols --c12=13 --phi12=-8.1

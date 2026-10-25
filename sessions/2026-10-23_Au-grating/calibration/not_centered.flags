@@ -1,0 +1,1 @@
+--binned --scan 128 128 --energy 200000 --semiangle 31.9 --angular-sampling 1.066 --scan-sampling 1.341 --defocus=-313 --rotation=5.04 --center 37.08 48.08 --flip-cols --c12=17 --phi12=26.9
