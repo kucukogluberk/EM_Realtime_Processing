@@ -46,8 +46,7 @@ main { position: relative; display: grid; gap: 6px; padding: 6px; overflow: hidd
 .rings circle { fill: none; }
 .rings circle.halo { stroke: rgba(0, 0, 0, .75); stroke-width: 3.5; }
 .rings circle.dash { stroke-width: 1.5; stroke-dasharray: 6 4; }
-.rings text { font: 12px system-ui, sans-serif; paint-order: stroke; stroke: rgba(0, 0, 0, .8); stroke-width: 3px;
-              stroke-linejoin: round; }
+
 #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
 .hint { color: var(--muted); font-size: 11px; margin-top: 4px; }
 </style>
@@ -283,9 +282,7 @@ class Panel {
     } else this.box.style.display = "none";
     this.rings.innerHTML = this.kind === "fft" ? cutoffs(this, c.zoom, cw / 2, ch / 2).map((r) =>
       `<circle class="halo" cx="${r.x}" cy="${r.y}" r="${r.r}"/>` +
-      `<circle class="dash" cx="${r.x}" cy="${r.y}" r="${r.r}" stroke="${r.color}"/>` +
-      `<text x="${r.x + r.r * 0.71 + 6}" y="${r.y + r.side * (r.r * 0.71 + 6)}" fill="${r.color}"
-        dominant-baseline="${r.side < 0 ? "auto" : "hanging"}">${r.label}</text>`).join("") : "";
+      `<circle class="dash" cx="${r.x}" cy="${r.y}" r="${r.r}" stroke="${r.color}"/>`).join("") : "";
   }
   upload(buf, hdr, key) {
     const gl = this.gl, [h, w] = hdr.shape, u16 = new Uint16Array(buf);
@@ -423,11 +420,11 @@ function cutoffs(p, zoom, ox, oy) {
   const t = p.t, c = p.camera(), u = sampling(); if (!t || !c || !t.n) return [];
   const dc = (t.n / 2 + 0.5) / t.bin, x = (dc - c.cx) * zoom + ox, y = (dc - c.cy) * zoom + oy;
   const unit = u ? "Å" : "px", out = [];
-  for (const [sigma, name, color, side] of [[S.lpA, "low-pass", "#7fd4ff", -1], [S.hpA, "high-pass", "#9dff8a", 1]]) {
+  for (const [sigma, name, color] of [[S.lpA, "low-pass", "#7fd4ff"], [S.hpA, "high-pass", "#9dff8a"]]) {
     if (!(sigma > 0)) continue;
     const q = Math.sqrt(2 * Math.LN2) / (2 * Math.PI * sigma);          // 1/Å (1/px without a sampling)
     const r = q * t.n * (u || 1) / t.bin * zoom;                         // texels → canvas px
-    out.push({x, y, r, color, side, label: `${name} ½ at d = ${+(1 / q).toPrecision(3)} ${unit}`});
+    out.push({x, y, r, color, label: `${name} ½ at d = ${+(1 / q).toPrecision(3)} ${unit}`});
   }
   return out;
 }
@@ -674,7 +671,8 @@ function exportPng() {
   const g = cv.getContext("2d");
   g.fillStyle = "#101317"; g.fillRect(0, 0, W, H + head);
   g.font = `${Math.round(12 * dpr)}px system-ui, sans-serif`; g.textBaseline = "middle"; g.fillStyle = "#d9dee4";
-  g.fillText(`realtime-stem · snapshot #${S.shown.seq} · ${metaText(true)}`, 6 * dpr, head / 2);
+  const cuts = FFT && S.fft ? cutoffs(FFT, 1, 0, 0).map((r) => r.label) : [];      // the circles' legend
+  g.fillText([`realtime-stem · snapshot #${S.shown.seq}`, metaText(true), ...cuts].join(" · "), 6 * dpr, head / 2);
   let x = 0;
   for (const p of ps) {
     g.drawImage(p.canvas, x, head);
@@ -691,7 +689,6 @@ function exportPng() {
       g.beginPath(); g.arc(x + r.x, head + r.y, r.r, 0, 2 * Math.PI); g.stroke();
       g.strokeStyle = g.fillStyle = r.color; g.setLineDash([6 * dpr, 4 * dpr]); g.lineWidth = 1.5 * dpr;
       g.beginPath(); g.arc(x + r.x, head + r.y, r.r, 0, 2 * Math.PI); g.stroke();
-      g.fillText(r.label, x + r.x + r.r * 0.71 + 6 * dpr, head + r.y + r.side * (r.r * 0.71 + 10 * dpr));
     }
     g.fillStyle = "#fff";
     const box = p.kind === "image" ? fftRegion() : null;
