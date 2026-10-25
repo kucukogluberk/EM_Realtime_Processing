@@ -57,9 +57,13 @@ replaces the matplotlib window as the recommended viewer.
   - **The image:** one panel, the parallax reconstruction.
   - **Filters,** shown in the Fourier transform too:
     - the phase flip (the pipeline's `phase_flipped` channel);
-    - high- and low-pass, σ in Å.
+    - high- and low-pass, σ in Å, on logarithmic sliders (the high-pass up to the field of
+      view). The page applies them to the spectrum itself, so they don't refetch the Fourier
+      transform.
   - **Fourier transform:** an optional panel of the visible square at native pixels (≤ 2048²),
     with d-spacings, a scale bar in Å⁻¹, and an outline of its square on the image.
+    - It is fetched once the view stops moving, at the panel's size.
+    - The server computes it as a float32 real FFT.
   - **Contrast:** auto (frame or view) or manual limits, with a histogram whose lines can be
     dragged. Manual starts from the limits shown.
   - **Always on:** scale bars.

@@ -63,8 +63,8 @@ main { position: relative; display: grid; gap: 6px; padding: 6px; overflow: hidd
   <h2 title="The Fourier transform shows the filters too. The phase flip only changes signs, so it leaves the power spectrum as it is.">Filters</h2>
   <label class="row" id="fliprow" title="sign(sin χ(q)) on the parallax sum: the pipeline's phase_flipped channel">
     <input type="checkbox" id="flip"> phase flip</label>
-  <div class="row"><label>high-pass σ</label><input type="range" id="hp" min="0" max="200" step="1" value="0"><output id="hp_o"></output></div>
-  <div class="row"><label>low-pass σ</label><input type="range" id="lp" min="0" max="10" step="0.1" value="0"><output id="lp_o"></output></div>
+  <div class="row" title="logarithmic, from 2 Å to the field of view"><label>high-pass σ</label><input type="range" id="hp" min="0" max="100" step="1" value="0"><output id="hp_o"></output></div>
+  <div class="row" title="logarithmic, from 0.1 Å to 20 Å"><label>low-pass σ</label><input type="range" id="lp" min="0" max="100" step="1" value="0"><output id="lp_o"></output></div>
 
   <h2>Contrast</h2>
   <div class="row"><label>limits from</label>
@@ -145,6 +145,20 @@ function canFlip() { return !!S.shown && S.shown.names.includes("phase_flipped")
 function chan() { return S.flip && canFlip() ? "phase_flipped" : S.base; }      // the channel shown
 function filtered() { return S.hpA > 0 || S.lpA > 0; }
 function sigmasPx() { const u = sampling(); return [u ? S.hpA / u : S.hpA, u ? S.lpA / u : S.lpA]; }
+// the filter sliders are logarithmic: position 0 is off, 1…100 run from `min` to `max` (Å, or px
+// without a sampling); the high-pass reaches the field of view
+const SLIDERS = {hp: {min: 2, max: () => (S.shown && sampling() ? S.shown.shape[1] * sampling() : 1000)},
+                 lp: {min: 0.1, max: () => 20}};
+function sigmaOf(id, pos) {
+  if (!(pos > 0)) return 0;
+  const {min, max} = SLIDERS[id];
+  return +(min * (max() / min) ** ((pos - 1) / 99)).toPrecision(2);
+}
+function positionOf(id, sigma) {
+  if (!(sigma > 0)) return 0;
+  const {min, max} = SLIDERS[id];
+  return Math.max(1, Math.min(100, Math.round(1 + 99 * Math.log(sigma / min) / Math.log(max() / min))));
+}
 function filterText() {
   const u = sampling() ? "Å" : "px", bits = [];
   if (S.flip && canFlip()) bits.push("phase-flipped");
@@ -183,6 +197,7 @@ class Panel {
     const loc = gl.getAttribLocation(p, "a");
     gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     this.tex = gl.createTexture(); this.lut = gl.createTexture();
+    this.floatLinear = !!gl.getExtension("OES_texture_float_linear");   // the FFT's R32F texture
     this.setLut(kind === "fft" ? "inferno" : S.cmap);
     this.t = null;      // the texture: {key, seq, region:[y0,x0,h,w], f, shape:[h,w], off, scale, data, sorted (+ fft: n, bin, source)}
     this.busy = false; this.again = false; this.cam = null;
@@ -210,7 +225,7 @@ class Panel {
     this.draw(); schedule();
   }
   camera() { return this.kind === "fft" ? this.cam : S.cam; }
-  setCamera(c) { if (this.kind === "fft") this.cam = c; else S.cam = c; }
+  setCamera(c) { if (this.kind === "fft") this.cam = c; else { S.cam = c; S.movedAt = performance.now(); } }
   toImage(px, py) {                     // CSS px in the stage → image px
     const c = this.camera(), {cw, ch} = this.size();
     return [(px - cw / 2) / c.zoom + c.cx, (py - ch / 2) / c.zoom + c.cy];
@@ -245,8 +260,9 @@ class Panel {
     gl.uniform1f(this.u.u_gamma, this.kind === "fft" ? 1 : S.gamma);
     gl.uniform1i(this.u.u_inv, this.kind === "image" && S.invert ? 1 : 0);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    const filt = this.kind === "fft" && !this.floatLinear ? gl.NEAREST : gl.LINEAR;
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filt);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filt);
     gl.uniform1i(this.u.u_tex, 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.lut); gl.uniform1i(this.u.u_lut, 1);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -273,6 +289,35 @@ class Panel {
     sample.sort((a, b) => a - b);
     this.t = {key, seq: hdr.seq, region: hdr.region, f: hdr.f, shape: hdr.shape, off: hdr.off, scale: hdr.scale,
               data, sorted: sample, n: hdr.n, bin: hdr.bin, source: hdr.source};
+  }
+  uploadSpectrum(buf, hdr, key) {       // the FFT: keep log10 P as sent; filterSpectrum() makes the texture
+    const u16 = new Uint16Array(buf), raw = new Float32Array(u16.length);
+    for (let i = 0; i < u16.length; i++) raw[i] = HALF[u16[i]] * hdr.scale + hdr.off;
+    this.t = {key, seq: hdr.seq, region: hdr.region, f: 1, shape: hdr.shape, off: 0, scale: 1, raw,
+              n: hdr.n, bin: hdr.bin, source: hdr.source};
+    this.filterSpectrum();
+  }
+  filterSpectrum() {                    // log10 (P·|H|²) = log10 P + 2 log10 |H(q)|, H the display filters
+    const t = this.t, gl = this.gl; if (!t || !gl) return;
+    const [h, w] = t.shape, [hp, lp] = sigmasPx(), c = 2 * Math.PI ** 2;
+    const f2 = (i) => ((i * t.bin + (t.bin - 1) / 2 - t.n / 2) / t.n) ** 2;   // cycles per native px, squared
+    const fy = Float64Array.from({length: h}, (_, i) => f2(i)), fx = Float64Array.from({length: w}, (_, j) => f2(j));
+    const data = new Float32Array(t.raw.length);
+    for (let i = 0, k = 0; i < h; i++) for (let j = 0; j < w; j++, k++) {
+      const q2 = fy[i] + fx[j];
+      let v = t.raw[k];
+      if (lp > 0) v -= 2 * c * lp * lp * q2 / Math.LN10;
+      if (hp > 0) v += 2 * Math.log10(Math.max(1 - Math.exp(-c * hp * hp * q2), 1e-6));
+      data[k] = v;
+    }
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, w, h, 0, gl.RED, gl.FLOAT, data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const step = Math.max(1, Math.floor(data.length / 65536)), sample = [];
+    for (let i = 0; i < data.length; i += step) sample.push(data[i]);
+    t.data = data; t.sorted = sample.sort((a, b) => a - b);
   }
   valueAt(ix, iy) {
     const t = this.t; if (!t) return null;
@@ -364,9 +409,9 @@ function scaleBar(p, zoom, width) {               // {px, label}: a round length
 function fitAll() {
   if (!IMG || !S.shown) return;
   const {cw, ch} = IMG.size(), [H, W] = S.shown.shape;
-  S.cam = fitCam(H, W, cw, ch);
+  S.cam = fitCam(H, W, cw, ch); S.movedAt = performance.now();
 }
-function oneToOne() { const c = S.cam; if (c) S.cam = {...c, zoom: 1 / (devicePixelRatio || 1)}; }
+function oneToOne() { const c = S.cam; if (c) { S.cam = {...c, zoom: 1 / (devicePixelRatio || 1)}; S.movedAt = performance.now(); } }
 function layout() {
   if (!S.shown) return;
   if (!IMG) IMG = new Panel("image");
@@ -409,14 +454,16 @@ function ensureFft(p) {
   const X0 = Math.max(0, Math.floor(x0)), Y0 = Math.max(0, Math.floor(y0));
   const region = [Y0, X0, Math.min(H, Math.ceil(y1)) - Y0, Math.min(W, Math.ceil(x1)) - X0];
   if (region[2] < 2 || region[3] < 2) return;
-  const [hp, lp] = sigmasPx();
-  const key = `${st.seq}|${chan()}|${region.join(",")}|${hp}|${lp}`;
+  const {cw, ch} = p.size(), out = Math.min(1024, Math.ceil(Math.max(cw, ch) * (devicePixelRatio || 1)));
+  const key = `${st.seq}|${chan()}|${region.join(",")}|${out}`;    // the filters are applied here, not fetched
   if (p.t && p.t.key === key) return;
-  const wait = 400 - (performance.now() - fftLast);               // at most ~2.5 per second
+  const still = performance.now() - (S.movedAt || 0);             // wait until the view stops moving
+  if (still < 150) { setTimeout(() => ensure(p), 160 - still); return; }
+  const wait = 250 - (performance.now() - fftLast);               // and at most 4 per second
   if (wait > 0) { setTimeout(() => ensure(p), wait); return; }
   fftLast = performance.now();
   fetchInto(p, `fft?seq=${st.seq}&ch=${encodeURIComponent(chan())}&y0=${region[0]}&x0=${region[1]}` +
-               `&h=${region[2]}&w=${region[3]}&n=2048&hp=${hp.toFixed(3)}&lp=${lp.toFixed(3)}`, key);
+               `&h=${region[2]}&w=${region[3]}&n=2048&out=${out}`, key);
 }
 async function fetchInto(p, url, key) {
   if (p.busy) { p.again = true; return; }
@@ -436,7 +483,8 @@ async function fetchInto(p, url, key) {
         p.note = rb - ra >= n ? "" : rb > ra ? ` · rows ${ra}–${rb} (scanned)` : " · nothing scanned in view";
       }
       const fresh = p.kind === "fft" && (!p.t || p.t.shape[0] !== hdr.shape[0]);
-      p.upload(await r.arrayBuffer(), hdr, key);
+      if (p.kind === "fft") p.uploadSpectrum(await r.arrayBuffer(), hdr, key);
+      else p.upload(await r.arrayBuffer(), hdr, key);
       if (fresh) { const {cw, ch} = p.size(); p.cam = fitCam(hdr.shape[0], hdr.shape[1], cw, ch); }
       redraw();
       ok = true;
@@ -486,7 +534,11 @@ function updateMeta() {
   $("scrub").max = Math.max(0, hist.length - 1);
   $("scrub").value = S.paused && hist.includes(st.seq) ? hist.indexOf(st.seq) : $("scrub").max;
   $("histlabel").textContent = `#${st.seq} · ${hist.length} kept of ${S.latest ? S.latest.count : 0}`;
-  const u = sampling() ? "Å" : "px"; $("hp_o").textContent = `${S.hpA} ${u}`; $("lp_o").textContent = `${S.lpA} ${u}`;
+  const u = sampling() ? "Å" : "px";
+  for (const k of ["hp", "lp"]) {
+    $(`${k}_o`).textContent = S[`${k}A`] ? `${S[`${k}A`]} ${u}` : "off";
+    if (document.activeElement !== $(k)) $(k).value = positionOf(k, S[`${k}A`]);
+  }
 }
 function onState(st) {
   if (st.seq < 0) return;
@@ -504,9 +556,10 @@ function applyParams() {
   const set = (id, v, ev = "change") => { const el = $(id); if (el.type === "checkbox") el.checked = v === "1" || v === "true";
     else el.value = v; el.dispatchEvent(new Event(ev)); };
   for (const [k, id, ev] of [["cmap", "cmap"], ["cmode", "cmode"], ["invert", "invert"],
-                             ["gamma", "gamma", "input"], ["hp", "hp", "input"], ["lp", "lp", "input"],
+                             ["gamma", "gamma", "input"],
                              ["plo", "plo", "input"], ["phi", "phi", "input"], ["flip", "flip"], ["fft", "fft"]])
     if (URLP.has(k)) set(id, URLP.get(k), ev || "change");
+  for (const k of ["hp", "lp"]) if (URLP.has(k)) S[`${k}A`] = +URLP.get(k);       // σ in Å
   if (URLP.has("ch")) S.base = URLP.get("ch");
   if ((URLP.get("channels") || "").includes("phase_flipped")) set("flip", "1");    // the old preset
 }
@@ -638,8 +691,11 @@ function bind() {
   on("base", "change", (e) => { S.base = e.target.value; if (S.shown) buildImageUI(S.shown, [...$("base").options].map((o) => o.value)); redraw(); schedule(); });
   on("fft", "change", (e) => { S.fft = e.target.checked; layout(); redraw(); schedule(); });
   on("flip", "change", (e) => { S.flip = e.target.checked; redraw(); schedule(); });
-  on("hp", "input", (e) => { S.hpA = +e.target.value; updateMeta(); redraw(); schedule(); });
-  on("lp", "input", (e) => { S.lpA = +e.target.value; updateMeta(); redraw(); schedule(); });
+  for (const k of ["hp", "lp"]) on(k, "input", (e) => {
+    S[`${k}A`] = sigmaOf(k, +e.target.value); updateMeta();
+    if (FFT) FFT.filterSpectrum();                // the FFT panel needs no new spectrum
+    redraw(); schedule();
+  });
   on("pause", "change", (e) => { S.paused = e.target.checked; if (!S.paused && S.latest) show(S.latest); else updateMeta(); });
   on("live", "click", () => { S.paused = false; $("pause").checked = false; if (S.latest) show(S.latest); });
   on("scrub", "input", (e) => {

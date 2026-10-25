@@ -256,9 +256,14 @@ serves a page at http://127.0.0.1:8050.
   - **Filters,** applied to the image and shown in its Fourier transform too:
     - the phase flip, sign(sin χ(q)): the pipeline's `phase_flipped` channel, computed from the
       same parallax sum;
-    - Gaussian high- and low-pass, σ in Å (display only).
+    - Gaussian high- and low-pass, σ in Å (display only). The sliders are logarithmic, the
+      high-pass from 2 Å up to the field of view, the low-pass from 0.1 to 20 Å.
   - **The Fourier transform panel** (optional) shows the visible square at native pixels, up to
-    2048², averaged to screen size.
+    2048², averaged to the panel's size.
+    - The server computes it, as a real FFT in float32: about 35 ms at 2048² on an M4 Pro.
+    - The page asks for it once the view has stopped moving.
+    - The page applies the filters itself (log P + 2 log₁₀|H(q)|), so moving a slider redraws it
+      at once.
     - It shows q and the d-spacing under the cursor, and has a scale bar in Å⁻¹.
     - A dashed outline on the image marks the square it transforms.
     - The phase flip changes only signs, so it leaves the power spectrum as it is.

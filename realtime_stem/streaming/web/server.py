@@ -18,10 +18,11 @@ Endpoints (all GET):
     /view            ?seq&ch&y0&x0&h&w&oh&ow[&hp&lp]: a region, block-averaged by the largest
                      integer that keeps it at least oh × ow, optionally Gaussian high/low-passed
                      (sigmas in full-resolution pixels), as float16 normalized by X-Offset/X-Scale
-    /fft             ?seq&ch&y0&x0&h&w[&n&hp&lp]: log10 power spectrum of the central n × n
-                     (≤ 2048) native pixels of a region, Hann-windowed, filtered like /view, averaged
-                     in X-Bin × X-Bin blocks to ≤ 1024 a side, float16 like /view; of a partly
-                     scanned image, only its finished rows (X-Rows: those used)
+    /fft             ?seq&ch&y0&x0&h&w[&n&out&hp&lp]: log10 power spectrum of the central n × n
+                     (≤ 2048) native pixels of a region, Hann-windowed, optionally filtered like
+                     /view, averaged in X-Bin × X-Bin blocks to ≤ out (1024) a side, float16 like
+                     /view; of a partly scanned image, only its finished rows (X-Rows: those used).
+                     The page applies the filters itself (|H(q)|² on the spectrum it has)
     /npy             ?seq&ch: one channel at full resolution, as .npy
 """
 
@@ -217,17 +218,22 @@ def power_spectrum(img: np.ndarray, y0: int, x0: int, h: int, w: int, n: int = 2
         ra, rb = max(ra, cy), min(rb, cy + n)
     if rb - ra < 8:
         return np.zeros((n // b, n // b), np.float32), (cy, cx, n), (ra, max(ra, rb)), b
-    sub = img[ra:rb, cx:cx + n].astype(np.float64)
-    tile = np.zeros((n, n))
-    tile[ra - cy:rb - cy] = (sub - sub.mean()) * np.outer(np.hanning(rb - ra), np.hanning(n))
-    spec = np.fft.fft2(tile)
+    sub = img[ra:rb, cx:cx + n].astype(np.float32)
+    tile = np.zeros((n, n), np.float32)
+    win = np.outer(np.hanning(rb - ra), np.hanning(n)).astype(np.float32)
+    tile[ra - cy:rb - cy] = (sub - sub.mean()) * win
+    half = np.fft.rfft2(tile)                          # the image is real: P(−q) = P(q)
+    ph = half.real ** 2 + half.imag ** 2               # (n, n/2 + 1), q_x ≥ 0
+    p = np.empty((n, n), np.float32)
+    p[:, :n // 2 + 1] = ph
+    p[:, n // 2 + 1:] = ph[(-np.arange(n)) % n][:, n // 2 - 1:0:-1]
     if hp > 0 or lp > 0:
         f2 = np.fft.fftfreq(n)[:, None] ** 2 + np.fft.fftfreq(n)[None, :] ** 2
         if lp > 0:
-            spec *= np.exp(-2.0 * np.pi**2 * lp**2 * f2)
+            p *= np.exp(-4.0 * np.pi**2 * lp**2 * f2)
         if hp > 0:
-            spec *= 1.0 - np.exp(-2.0 * np.pi**2 * hp**2 * f2)
-    p = np.fft.fftshift(np.abs(spec) ** 2)
+            p *= (1.0 - np.exp(-2.0 * np.pi**2 * hp**2 * f2)) ** 2
+    p = np.fft.fftshift(p)
     if b > 1:
         p = p.reshape(n // b, b, n // b, b).mean(axis=(1, 3))
     floor = p.mean() * 1e-6 + 1e-30
@@ -354,11 +360,11 @@ class _Handler(BaseHTTPRequestHandler):
         if err:
             return self._error(404, err)
         H, W = img.shape
-        y0, x0, h, w, n = self._ints(q, "y0", "x0", "h", "w", "n", default=0)
+        y0, x0, h, w, n, out = self._ints(q, "y0", "x0", "h", "w", "n", "out", default=0)
         hp, lp = (float(q[k][0]) if k in q else 0.0 for k in ("hp", "lp"))
         rows = (frame.header.get("meta") or {}).get("complete_rows")
         spec, (cy, cx, n), (ra, rb), b = power_spectrum(img, y0, x0, h or H, w or W, n or 2048,
-                                                        rows, hp, lp)
+                                                        rows, hp, lp, out or 1024)
         body, off, scale = encode(spec)
         self._send(200, body, "application/octet-stream", {
             "X-Seq": frame.seq, "X-Shape": f"{spec.shape[0]},{spec.shape[1]}",

@@ -29,8 +29,8 @@ python -m realtime_stem.streaming.web tcp://127.0.0.1:5601
 
 - **Navigation:** one image, the parallax reconstruction. Wheel to zoom, drag to pan,
   double-click or `f` to fit, `1` for native pixels.
-- **Filters:** the phase flip, and high- and low-pass with σ in Å. The Fourier transform shows
-  them too.
+- **Filters:** the phase flip, and high- and low-pass with σ in Å (logarithmic sliders; the
+  high-pass reaches the field of view). The Fourier transform shows them too, at once.
 - **Fourier transform** (optional panel) of the visible square, with q and the d-spacing under
   the cursor.
   - A dashed outline on the image marks the square.
