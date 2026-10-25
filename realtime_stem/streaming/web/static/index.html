@@ -85,10 +85,12 @@ body.recording #rec { border-color: var(--bad); color: var(--bad); }
   </details>
 
   <details id="sec-filters" open><summary title="The Fourier transform shows the filters too. The phase flip only changes signs, so it leaves the power spectrum as it is.">Filters</summary>
-    <label class="row" id="fliprow" title="sign(sin χ(q)) on the parallax sum: the pipeline's phase_flipped channel">
+    <div class="row" id="fliprow"><label id="fliplabel" title="sign(sin χ(q)) on the parallax sum: the pipeline's phase_flipped channel">
       <input type="checkbox" id="flip"> phase flip</label>
-    <div class="row" title="logarithmic, from 2 Å to the field of view"><label>high-pass σ</label><input type="range" id="hp" min="0" max="100" step="1" value="0"><output id="hp_o"></output></div>
-    <div class="row" title="logarithmic, from 0.1 Å to 20 Å"><label>low-pass σ</label><input type="range" id="lp" min="0" max="100" step="1" value="0"><output id="lp_o"></output></div>
+      <label for="order" title="Butterworth order of the high- and low-pass: higher is sharper">order</label>
+      <select id="order" title="Butterworth order of the high- and low-pass: higher is sharper"><option>2</option><option>4</option><option>8</option><option selected>12</option><option>16</option></select></div>
+    <div class="row" title="removes spacings coarser than this; logarithmic, from 2 Å to the field of view"><label>high-pass</label><input type="range" id="hp" min="0" max="100" step="1" value="0"><output id="hp_o"></output></div>
+    <div class="row" title="removes spacings finer than this; logarithmic, from 0.3 Å to 50 Å"><label>low-pass</label><input type="range" id="lp" min="0" max="100" step="1" value="0"><output id="lp_o"></output></div>
   </details>
 
   <details id="sec-contrast" open><summary>Contrast</summary>
@@ -133,7 +135,7 @@ const $ = (id) => document.getElementById(id);
 const S = {
   latest: null, shown: null, paused: false, base: null, flip: false, fft: false, cam: null,
   cmode: "frame", pLo: 0.5, pHi: 99.5, mLo: 0, mHi: 1, gamma: 1, cmap: "gray", invert: false,
-  hpA: 0, lpA: 0, arrivals: [],
+  hpA: 0, lpA: 0, order: 12, arrivals: [],
 };
 let IMG = null, FFT = null;                       // the reconstruction panel and the Fourier transform's
 
@@ -178,20 +180,29 @@ function sampling() { const s = S.shown && S.shown.meta && S.shown.meta.sampling
 function canFlip() { return !!S.shown && S.shown.names.includes("phase_flipped") && S.base === "parallax"; }
 function chan() { return S.flip && canFlip() ? "phase_flipped" : S.base; }      // the channel shown
 function filtered() { return S.hpA > 0 || S.lpA > 0; }
-function sigmasPx() { const u = sampling(); return [u ? S.hpA / u : S.hpA, u ? S.lpA / u : S.lpA]; }
+// The high- and low-pass are the Butterworth filters of quantem and of the pipeline's readout,
+// order n (S.order), cutoff periods d_c (S.hpA, S.lpA, in Å), q_c = 1/d_c:
+// H = 1 − 1/(1 + (q/q_c)^2n) and 1/(1 + (q/q_c)^2n), both ½ at the cutoff.
+function cutoffsPx() { const u = sampling(); return [u ? S.hpA / u : S.hpA, u ? S.lpA / u : S.lpA]; }
+function log10H(q, hp, lp, n) {      // log10 H(q) of both filters, q in cycles per px, cutoffs in px
+  let v = 0;
+  if (lp > 0) v -= Math.log10(1 + (q * lp) ** (2 * n));
+  if (hp > 0) { const r = (q * hp) ** (2 * n); v += Math.log10(Math.max(r / (1 + r), 1e-12)); }
+  return v;
+}
 // the filter sliders are logarithmic: position 0 is off, 1…100 run from `min` to `max` (Å, or px
 // without a sampling); the high-pass reaches the field of view
 const SLIDERS = {hp: {min: 2, max: () => (S.shown && sampling() ? S.shown.shape[1] * sampling() : 1000)},
-                 lp: {min: 0.1, max: () => 20}};
-function sigmaOf(id, pos) {
+                 lp: {min: 0.3, max: () => 50}};
+function cutoffOf(id, pos) {
   if (!(pos > 0)) return 0;
   const {min, max} = SLIDERS[id];
   return +(min * (max() / min) ** ((pos - 1) / 99)).toPrecision(2);
 }
-function positionOf(id, sigma) {
-  if (!(sigma > 0)) return 0;
+function positionOf(id, d) {
+  if (!(d > 0)) return 0;
   const {min, max} = SLIDERS[id];
-  return Math.max(1, Math.min(100, Math.round(1 + 99 * Math.log(sigma / min) / Math.log(max() / min))));
+  return Math.max(1, Math.min(100, Math.round(1 + 99 * Math.log(d / min) / Math.log(max() / min))));
 }
 function filterText() {
   const u = sampling() ? "Å" : "px", bits = [];
@@ -337,16 +348,12 @@ class Panel {
   }
   filterSpectrum() {                    // log10 (P·|H|²) = log10 P + 2 log10 |H(q)|, H the display filters
     const t = this.t, gl = this.gl; if (!t || !gl) return;
-    const [h, w] = t.shape, [hp, lp] = sigmasPx(), c = 2 * Math.PI ** 2;
+    const [h, w] = t.shape, [hp, lp] = cutoffsPx(), n = S.order;
     const f2 = (i) => ((i * t.bin + (t.bin - 1) / 2 - t.n / 2) / t.n) ** 2;   // cycles per native px, squared
     const fy = Float64Array.from({length: h}, (_, i) => f2(i)), fx = Float64Array.from({length: w}, (_, j) => f2(j));
     const data = new Float32Array(t.raw.length);
     for (let i = 0, k = 0; i < h; i++) for (let j = 0; j < w; j++, k++) {
-      const q2 = fy[i] + fx[j];
-      let v = t.raw[k];
-      if (lp > 0) v -= 2 * c * lp * lp * q2 / Math.LN10;
-      if (hp > 0) v += 2 * Math.log10(Math.max(1 - Math.exp(-c * hp * hp * q2), 1e-6));
-      data[k] = v;
+      data[k] = t.raw[k] + (hp > 0 || lp > 0 ? 2 * log10H(Math.sqrt(fy[i] + fx[j]), hp, lp, n) : 0);
     }
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
@@ -443,17 +450,16 @@ function scaleBar(p, zoom, width) {               // {px, label}: a round length
   return {px: nice / per, label};
 }
 
-// The display filters' cutoffs on the FFT panel: where each Gaussian's amplitude transfer is ½,
-// q½ = √(2 ln 2) / (2πσ), as circles in px of the canvas whose centre is (ox, oy) at this zoom.
+// The display filters' cutoffs on the FFT panel, q_c = 1/d_c (H = ½), as circles in px of the
+// canvas whose centre is (ox, oy) at this zoom.
 function cutoffs(p, zoom, ox, oy) {
   const t = p.t, c = p.camera(), u = sampling(); if (!t || !c || !t.n) return [];
   const dc = (t.n / 2 + 0.5) / t.bin, x = (dc - c.cx) * zoom + ox, y = (dc - c.cy) * zoom + oy;
   const unit = u ? "Å" : "px", out = [];
-  for (const [sigma, name, color] of [[S.lpA, "low-pass", "#7fd4ff"], [S.hpA, "high-pass", "#9dff8a"]]) {
-    if (!(sigma > 0)) continue;
-    const q = Math.sqrt(2 * Math.LN2) / (2 * Math.PI * sigma);          // 1/Å (1/px without a sampling)
-    const r = q * t.n * (u || 1) / t.bin * zoom;                         // texels → canvas px
-    out.push({x, y, r, color, label: `${name} ½ at d = ${+(1 / q).toPrecision(3)} ${unit}`});
+  for (const [d, name, color] of [[S.lpA, "low-pass", "#7fd4ff"], [S.hpA, "high-pass", "#9dff8a"]]) {
+    if (!(d > 0)) continue;
+    const r = t.n * (u || 1) / d / t.bin * zoom;                        // q_c in texels → canvas px
+    out.push({x, y, r, color, label: `${name} at d = ${+d.toPrecision(3)} ${unit} (Butterworth ${S.order})`});
   }
   return out;
 }
@@ -483,8 +489,8 @@ function ensure(p) {
   const st = S.shown; if (!st || !p.gl) return;
   if (p.kind === "fft") return ensureFft(p);
   const c = p.camera(); if (!c || !chan()) return;
-  const [H, W] = st.shape, dpr = devicePixelRatio || 1, [hp, lp] = sigmasPx();
-  const key = `${st.seq}|${chan()}|${hp}|${lp}`;
+  const [H, W] = st.shape, dpr = devicePixelRatio || 1, [hp, lp] = cutoffsPx();
+  const key = `${st.seq}|${chan()}|${hp}|${lp}|${S.order}`;
   let [x0, x1, y0, y1] = p.visible();
   const need = Math.max(1, Math.floor(1 / (c.zoom * dpr)));        // image px per device px
   const t = p.t;
@@ -498,7 +504,7 @@ function ensure(p) {
   if (x1 <= x0 || y1 <= y0) return;
   const ow = Math.max(1, Math.ceil((x1 - x0) / need)), oh = Math.max(1, Math.ceil((y1 - y0) / need));
   fetchInto(p, `view?seq=${st.seq}&ch=${encodeURIComponent(chan())}&y0=${y0}&x0=${x0}&h=${y1 - y0}&w=${x1 - x0}` +
-               `&oh=${oh}&ow=${ow}&hp=${hp.toFixed(3)}&lp=${lp.toFixed(3)}`, key);
+               `&oh=${oh}&ow=${ow}&hp=${hp.toFixed(3)}&lp=${lp.toFixed(3)}&order=${S.order}`, key);
 }
 let fftLast = 0;
 function ensureFft(p) {
@@ -603,7 +609,7 @@ function onState(st) {
   showControl(st);
   if (!S.paused) show(st); else updateMeta();
 }
-// URL parameters preset the controls, e.g. ?flip=1&fft=1&hp=20&cmap=inferno&view=1to1;
+// URL parameters preset the controls, e.g. ?flip=1&fft=1&hp=50&lp=1.5&order=12&cmap=inferno&view=1to1;
 // ?snapshot[=seq] shows one snapshot without the live stream (for screenshots and for links)
 const URLP = new URLSearchParams(location.search);
 function applyParams() {
@@ -613,7 +619,8 @@ function applyParams() {
                              ["gamma", "gamma", "input"],
                              ["plo", "plo", "input"], ["phi", "phi", "input"], ["flip", "flip"], ["fft", "fft"]])
     if (URLP.has(k)) set(id, URLP.get(k), ev || "change");
-  for (const k of ["hp", "lp"]) if (URLP.has(k)) S[`${k}A`] = +URLP.get(k);       // σ in Å
+  for (const k of ["hp", "lp"]) if (URLP.has(k)) S[`${k}A`] = +URLP.get(k);       // cutoff period, Å
+  if (URLP.has("order")) set("order", URLP.get("order"));
   if (URLP.has("ch")) S.base = URLP.get("ch");
   if ((URLP.get("channels") || "").includes("phase_flipped")) set("flip", "1");    // the old preset
 }
@@ -642,7 +649,7 @@ function buildImageUI(st, bases) {
   sel.value = S.base;
   $("baserow").style.display = bases.length > 1 ? "flex" : "none";
   $("flip").disabled = !canFlip();
-  $("fliprow").classList.toggle("off", !canFlip());
+  $("fliplabel").classList.toggle("off", !canFlip());
 }
 let HIST = null;                                  // the histogram as drawn: {lo, hi} in data units
 function histogram() {                            // {counts, lo, hi} of what the image shows
@@ -949,8 +956,9 @@ function bind() {
   on("base", "change", (e) => { S.base = e.target.value; if (S.shown) buildImageUI(S.shown, [...$("base").options].map((o) => o.value)); redraw(); schedule(); });
   on("fft", "change", (e) => { S.fft = e.target.checked; layout(); redraw(); schedule(); });
   on("flip", "change", (e) => { S.flip = e.target.checked; redraw(); schedule(); });
+  on("order", "change", (e) => { S.order = +e.target.value; if (FFT) FFT.filterSpectrum(); redraw(); schedule(); });
   for (const k of ["hp", "lp"]) on(k, "input", (e) => {
-    S[`${k}A`] = sigmaOf(k, +e.target.value); updateMeta();
+    S[`${k}A`] = cutoffOf(k, +e.target.value); updateMeta();
     if (FFT) FFT.filterSpectrum();                // the FFT panel needs no new spectrum
     redraw(); schedule();
   });

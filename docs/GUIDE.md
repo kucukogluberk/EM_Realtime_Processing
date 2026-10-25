@@ -288,8 +288,12 @@ all, which would otherwise need a scan rotation.
   - **Filters,** applied to the image and shown in its Fourier transform too:
     - the phase flip, sign(sin χ(q)): the pipeline's `phase_flipped` channel, computed from the
       same parallax sum;
-    - Gaussian high- and low-pass, σ in Å (display only). The sliders are logarithmic, the
-      high-pass from 2 Å up to the field of view, the low-pass from 0.1 to 20 Å.
+    - Butterworth high- and low-pass (display only), set by their cutoff period d_c in Å: the
+      high-pass removes spacings coarser than d_c, the low-pass those finer: H = 1/(1 +
+      (q/q_c)^2n) and its complement, ½ at q_c = 1/d_c, the filters of quantem and of the
+      pipeline's own `--lowpass` / `--highpass`. Order 12 by default, 2–16 in the "order" menu.
+      The sliders are logarithmic, the high-pass from 2 Å up to the field of view, the low-pass
+      from 0.3 to 50 Å. The Fourier transform marks each cutoff with a circle.
   - **The Fourier transform panel** (optional) shows the visible square at native pixels, up to
     2048², averaged to the panel's size.
     - The server computes it, as a real FFT in float32: about 35 ms at 2048² on an M4 Pro.
@@ -323,7 +327,8 @@ all, which would otherwise need a scan rotation.
       - Keep the tab visible: browsers slow the timers of a hidden tab to about once a second.
     - **Format:** H.264 in `.mkv` in Chrome and Edge, VP9 `.webm` in Firefox, `.mp4` in Safari.
       The page writes the duration into the `.mkv` / `.webm`, which the browser leaves out.
-- **Links:** URL parameters preset the controls, e.g. `?flip=1&fft=1&hp=20&cmap=inferno&view=1to1`
+- **Links:** URL parameters preset the controls, e.g.
+  `?flip=1&fft=1&hp=50&lp=1.5&order=12&cmap=inferno&view=1to1` (`hp`, `lp`: cutoff periods in Å)
   (`ch=<channel>` picks another channel, e.g. `coverage`). `?snapshot[=seq]` shows one snapshot
   without the live stream.
 - **Another computer:** keep the viewer next to the pipeline and forward its port

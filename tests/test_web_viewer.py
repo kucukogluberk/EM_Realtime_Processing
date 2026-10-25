@@ -18,6 +18,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from realtime_stem.streaming.web.server import (  # noqa: E402
+    transfer,
     STATIC,
     FrameStore,
     channel_stats,
@@ -84,10 +85,22 @@ def test_view_filters_keep_the_shape_and_act():
     rng = np.random.default_rng(1)
     img = rng.standard_normal((128, 128)).astype(np.float32)
     plain, _, _ = view(img, 32, 32, 64, 64, 64, 64)
-    low, _, _ = view(img, 32, 32, 64, 64, 64, 64, lp=2.0)
-    high, _, _ = view(img, 32, 32, 64, 64, 64, 64, hp=4.0)
+    low, _, _ = view(img, 32, 32, 64, 64, 64, 64, lp=6.0)          # keeps q < 1/6 of a 1/px
+    high, _, _ = view(img, 32, 32, 64, 64, 64, 64, hp=16.0, order=4)
     assert plain.shape == low.shape == high.shape == (64, 64)
     assert low.std() < 0.5 * plain.std() and abs(high.mean()) < 0.1
+
+
+def test_display_filters_are_butterworth():
+    qc = 0.1
+    q = np.array([0.5, 0.8, 1.0, 1.25, 2.0]) * qc
+    low, high = transfer(q, lp=1 / qc), transfer(q, hp=1 / qc)
+    np.testing.assert_allclose([low[2], high[2]], [0.5, 0.5])       # ½ at the cutoff, as quantem
+    assert low[1] > 0.99 and low[4] < 1e-3                          # order 12: sharp
+    assert high[4] > 0.99 and high[0] < 1e-3                        # mirrored in log q
+    np.testing.assert_allclose(low + high, 1.0)                     # complementary
+    assert transfer(q, lp=1 / qc, order=2)[4] > 0.05                 # order 2: soft
+    assert transfer(np.array([0.0]), hp=10)[0] == 0 and transfer(q)[0] == 1
 
 
 def test_encode_keeps_precision_at_any_level():
@@ -137,9 +150,9 @@ def test_power_spectrum_shows_the_display_filters_and_bins_large_regions():
     q = np.hypot(*np.meshgrid(np.fft.fftshift(np.fft.fftfreq(512)),
                               np.fft.fftshift(np.fft.fftfreq(512)), indexing="ij"))
     plain = power_spectrum(img, 0, 0, 512, 512, n=512)[0]
-    low = power_spectrum(img, 0, 0, 512, 512, n=512, lp=4.0)[0]       # σ 4 px: gone by 0.1 1/px
+    low = power_spectrum(img, 0, 0, 512, 512, n=512, lp=4.0)[0]       # q_c = 0.25 1/px, order 12
     high = power_spectrum(img, 0, 0, 512, 512, n=512, hp=4.0)[0]
-    outer, inner = q > 0.25, (q > 0.005) & (q < 0.02)
+    outer, inner = q > 0.45, (q > 0.005) & (q < 0.02)
     assert low[outer].mean() < plain[outer].mean() - 5               # log10: 1e5 weaker
     assert high[inner].mean() < plain[inner].mean() - 0.5
     assert abs(high[outer].mean() - plain[outer].mean()) < 0.05      # untouched where it passes
@@ -181,7 +194,7 @@ def test_endpoints(server):
     back = np.frombuffer(body, "<f2").astype(np.float64).reshape(48, 64) * float(hdr["X-Scale"]) \
         + float(hdr["X-Offset"])
     np.testing.assert_allclose(back, stack[1].reshape(48, 2, 64, 2).mean(axis=(1, 3)), atol=0.05)
-    status, hdr, body = _get(base + "/fft?ch=parallax&n=64&hp=2&lp=0.5")
+    status, hdr, body = _get(base + "/fft?ch=parallax&n=64&hp=2&lp=0.5&order=4")
     assert hdr["X-Shape"] == "64,64" and len(body) == 64 * 64 * 2 and hdr["X-Rows"] == "16,80"
     assert hdr["X-Region"] == "16,32,64,64" and hdr["X-Bin"] == "1"
     store.put(stack, {"channels": ["parallax", "phase_flipped"], "meta": {"complete_rows": [0, 40]}})

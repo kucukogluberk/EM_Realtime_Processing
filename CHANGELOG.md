@@ -89,9 +89,10 @@ replaces the matplotlib window as the recommended viewer.
   - **The image:** one panel, the parallax reconstruction.
   - **Filters,** shown in the Fourier transform too:
     - the phase flip (the pipeline's `phase_flipped` channel);
-    - high- and low-pass, σ in Å, on logarithmic sliders (the high-pass up to the field of
-      view). The page applies them to the spectrum itself, so they don't refetch the Fourier
-      transform.
+    - Butterworth high- and low-pass (order 12 by default, 2–16 in a menu), set by their
+      cutoff period in Å on logarithmic sliders (the high-pass up to the field of view). The
+      page applies them to the spectrum itself, so they don't refetch the Fourier transform,
+      and marks each cutoff with a circle.
   - **Fourier transform:** an optional panel of the visible square at native pixels (≤ 2048²),
     with d-spacings, a scale bar in Å⁻¹, and an outline of its square on the image.
     - It is fetched once the view stops moving, at the panel's size.

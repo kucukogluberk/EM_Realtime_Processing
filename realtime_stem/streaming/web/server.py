@@ -15,10 +15,11 @@ Endpoints (all GET):
     /                the page;  /static/<file>  its scripts
     /events          Server-Sent Events: the state (below) of each new snapshot
     /state           the state of the newest snapshot (or ?seq=), as JSON
-    /view            ?seq&ch&y0&x0&h&w&oh&ow[&hp&lp]: a region, block-averaged by the largest
-                     integer that keeps it at least oh × ow, optionally Gaussian high/low-passed
-                     (sigmas in full-resolution pixels), as float16 normalized by X-Offset/X-Scale
-    /fft             ?seq&ch&y0&x0&h&w[&n&out&hp&lp]: log10 power spectrum of the central n × n
+    /view            ?seq&ch&y0&x0&h&w&oh&ow[&hp&lp&order]: a region, block-averaged by the
+                     largest integer that keeps it at least oh × ow, optionally high/low-passed
+                     (Butterworth of `order`, 12 by default, cutoff periods in full-resolution
+                     pixels), as float16 normalized by X-Offset/X-Scale
+    /fft             ?seq&ch&y0&x0&h&w[&n&out&hp&lp&order]: log10 power spectrum of the central n × n
                      (≤ 2048) native pixels of a region, Hann-windowed, optionally filtered like
                      /view, averaged in X-Bin × X-Bin blocks to ≤ out (1024) a side, float16 like
                      /view; of a partly scanned image, only its finished rows (X-Rows: those used).
@@ -148,21 +149,38 @@ class FrameStore:
 
 # ── the images the page asks for ───────────────────────────────────────────────
 
-def _gauss(img: np.ndarray, sigma: float, high: bool) -> np.ndarray:
+ORDER = 12                                   # the Butterworth order of the display filters
+
+
+def transfer(q: np.ndarray, hp: float = 0.0, lp: float = 0.0, order: int = ORDER) -> np.ndarray:
+    """H(q) of the display filters, the Butterworth high- and low-pass of quantem and of the
+    pipeline's own readout (`--lowpass` / `--highpass`): 1/(1 + (q/q_c)^2n) and its complement
+    1 − 1/(1 + (q/q_c)^2n), with cutoff periods `hp` / `lp` = 1/q_c (in the units of 1/q, e.g.
+    px; 0: off), so H = ½ at the cutoff."""
+    h = np.ones_like(q, dtype=np.float64)
+    if lp > 0:
+        h /= 1.0 + (q * lp) ** (2 * order)
+    if hp > 0:
+        r = (q * hp) ** (2 * order)
+        h *= r / (1.0 + r)
+    return h
+
+
+def _filter(img: np.ndarray, hp: float, lp: float, order: int) -> np.ndarray:
     fy = np.fft.fftfreq(img.shape[0])[:, None]
     fx = np.fft.rfftfreq(img.shape[1])[None, :]
-    g = np.exp(-2.0 * np.pi**2 * sigma**2 * (fy**2 + fx**2))
-    if high:
-        g = 1.0 - g
-    return np.fft.irfft2(np.fft.rfft2(img) * g, s=img.shape).astype(np.float32)
+    h = transfer(np.sqrt(fy**2 + fx**2), hp, lp, order)
+    return np.fft.irfft2(np.fft.rfft2(img) * h, s=img.shape).astype(np.float32)
 
 
 def view(img: np.ndarray, y0: int, x0: int, h: int, w: int, oh: int, ow: int,
-         hp: float = 0.0, lp: float = 0.0) -> tuple[np.ndarray, tuple[int, int, int, int], int]:
+         hp: float = 0.0, lp: float = 0.0, order: int = ORDER
+         ) -> tuple[np.ndarray, tuple[int, int, int, int], int]:
     """A region of `img`, block-averaged by the largest integer f that keeps it at least
-    oh × ow (f = 1, native pixels, when zoomed in), optionally high-/low-passed with Gaussian
-    sigmas `hp`/`lp` in full-resolution pixels. The filters run on the averaged region plus a
-    margin of 3 sigma (so they cost what the screen does, not what the snapshot does).
+    oh × ow (f = 1, native pixels, when zoomed in), optionally high-/low-passed (`transfer`:
+    Butterworth of `order`, cutoff periods `hp`/`lp` in full-resolution pixels). The filters run
+    on the averaged region plus a margin of 3 cutoff periods (so they cost what the screen does,
+    not what the snapshot does).
     Returns (data, (y0, x0, h, w) actually covered, f)."""
     H, W = img.shape
     y0, x0 = max(0, min(int(y0), H - 1)), max(0, min(int(x0), W - 1))
@@ -178,10 +196,8 @@ def view(img: np.ndarray, y0: int, x0: int, h: int, w: int, oh: int, ow: int,
     sub = img[ya:yb, xa:xb].astype(np.float32, copy=False)
     if f > 1:
         sub = sub.reshape(sub.shape[0] // f, f, sub.shape[1] // f, f).mean(axis=(1, 3))
-    if lp > 0:
-        sub = _gauss(sub, lp / f, high=False)
-    if hp > 0:
-        sub = _gauss(sub, hp / f, high=True)
+    if hp > 0 or lp > 0:
+        sub = _filter(sub, hp / f, lp / f, order)
     oy, ox = (y0 - ya) // f, (x0 - xa) // f
     out = sub[oy:oy + h // f, ox:ox + w // f]
     return np.ascontiguousarray(out, dtype=np.float32), (y0, x0, h, w), f
@@ -189,11 +205,11 @@ def view(img: np.ndarray, y0: int, x0: int, h: int, w: int, oh: int, ow: int,
 
 def power_spectrum(img: np.ndarray, y0: int, x0: int, h: int, w: int, n: int = 2048,
                    rows: tuple[int, int] | None = None, hp: float = 0.0, lp: float = 0.0,
-                   out: int = 1024
+                   out: int = 1024, order: int = ORDER
                    ) -> tuple[np.ndarray, tuple[int, int, int], tuple[int, int], int]:
     """log10 power spectrum (fftshifted, Hann-windowed) of the central n × n native pixels of a
-    region (n even, at most the region and 4096), high-/low-passed like /view (Gaussian sigmas `hp`
-    / `lp` in full-resolution pixels, their transfer applied to the spectrum), then averaged in
+    region (n even, at most the region and 4096), high-/low-passed like /view (`transfer`, cutoff
+    periods `hp` / `lp` in full-resolution pixels, H² applied to the spectrum), then averaged in
     b × b blocks to at most `out` pixels a side: the whole q range at about the screen's
     resolution.
 
@@ -230,11 +246,8 @@ def power_spectrum(img: np.ndarray, y0: int, x0: int, h: int, w: int, n: int = 2
     p[:, :n // 2 + 1] = ph
     p[:, n // 2 + 1:] = ph[(-np.arange(n)) % n][:, n // 2 - 1:0:-1]
     if hp > 0 or lp > 0:
-        f2 = np.fft.fftfreq(n)[:, None] ** 2 + np.fft.fftfreq(n)[None, :] ** 2
-        if lp > 0:
-            p *= np.exp(-4.0 * np.pi**2 * lp**2 * f2)
-        if hp > 0:
-            p *= (1.0 - np.exp(-2.0 * np.pi**2 * hp**2 * f2)) ** 2
+        q = np.sqrt(np.fft.fftfreq(n)[:, None] ** 2 + np.fft.fftfreq(n)[None, :] ** 2)
+        p *= (transfer(q, hp, lp, order) ** 2).astype(np.float32)
     p = np.fft.fftshift(p)
     if b > 1:
         p = p.reshape(n // b, b, n // b, b).mean(axis=(1, 3))
@@ -371,7 +384,8 @@ class _Handler(BaseHTTPRequestHandler):
         H, W = img.shape
         h, w = h or H, w or W
         hp, lp = (float(q[n][0]) if n in q else 0.0 for n in ("hp", "lp"))
-        data, (ry, rx, rh, rw), f = view(img, y0, x0, h, w, oh or h, ow or w, hp, lp)
+        order = int(q["order"][0]) if "order" in q else ORDER
+        data, (ry, rx, rh, rw), f = view(img, y0, x0, h, w, oh or h, ow or w, hp, lp, order)
         body, off, scale = encode(data)
         self._send(200, body, "application/octet-stream", {
             "X-Seq": frame.seq, "X-Shape": f"{data.shape[0]},{data.shape[1]}",
@@ -385,9 +399,10 @@ class _Handler(BaseHTTPRequestHandler):
         H, W = img.shape
         y0, x0, h, w, n, out = self._ints(q, "y0", "x0", "h", "w", "n", "out", default=0)
         hp, lp = (float(q[k][0]) if k in q else 0.0 for k in ("hp", "lp"))
+        order = int(q["order"][0]) if "order" in q else ORDER
         rows = (frame.header.get("meta") or {}).get("complete_rows")
         spec, (cy, cx, n), (ra, rb), b = power_spectrum(img, y0, x0, h or H, w or W, n or 2048,
-                                                        rows, hp, lp, out or 1024)
+                                                        rows, hp, lp, out or 1024, order)
         body, off, scale = encode(spec)
         self._send(200, body, "application/octet-stream", {
             "X-Seq": frame.seq, "X-Shape": f"{spec.shape[0]},{spec.shape[1]}",
