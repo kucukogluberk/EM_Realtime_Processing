@@ -18,7 +18,7 @@ flags.
 
 ## Watch in a browser
 
-![The browser viewer: the parallax image, phase-flipped and low-passed, and its Fourier transform](images/web_viewer.jpg)
+![The browser viewer served by run.py --viewer-port: the Reconstruction section's sliders, the parallax image phase-flipped, high- and low-passed, and its Fourier transform with the filters' cutoff circles](images/web_viewer.jpg)
 
 Start the viewer, subscribed to the pipeline's live stream (`run.py --live-endpoint …`), and
 open http://127.0.0.1:8050:
