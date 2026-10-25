@@ -26,6 +26,9 @@ Three stages, each changeable on its own:
 
 - `realtime_stem/apps/run.py`: the program that is run. It owns the transport flags (endpoint,
   batch, scheduler, connections, live preview, `--continuous`) and never names an algorithm.
+  `--viewer-port` serves the browser viewer in process, with live control of the reconstruction
+  (`apps/control.py`; the algorithm declares what is tunable: `Algorithm.live_params` / `retune`).
+  Changes are applied under `ingest/sink.ACC_LOCK`, between batches.
 - `realtime_stem/processing/parallax/`: `config.py` (the physics flags and their units),
   `engine.py` (`preprocess_geometry`: bright-field pixels and their shifts, NumPy;
   `ParallaxAccumulator`: the scatter-add, `--accumulate` modes), `readout.py` (the live channels:

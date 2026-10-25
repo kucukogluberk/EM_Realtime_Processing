@@ -6,6 +6,26 @@ docker/Dockerfile .`, so the versions can be switched back and forth.
 
 ## Unreleased
 
+**Tune the reconstruction from the browser: `run.py --viewer-port 8050`.** The pipeline serves
+the viewer itself (one command instead of two), and the page's Reconstruction section fine-tunes
+the running reconstruction.
+
+- **What it tunes:** C10, the rotation, C12 (as Cartesian a, b) and the `--accumulate` mode. The
+  command line's values are the starting point and remain the target for the microscope's
+  knobs.
+- **How a change lands:** between batches, under a lock shared with the ingest, and into the
+  run's arguments, so later scans and the saved results use it. A snapshot is published at once.
+  - `latest` re-deposits the frames it holds with the new shifts
+    (`ParallaxAccumulator.set_geometry`), so the image is exact at once: ~0.2 s for a 256² scan
+    at ×4 on an M4 Pro.
+  - The other modes restart their image.
+- **Reset and copy:** back to the command line's values, and "copy flags" for the tuned ones.
+- **After the run** the viewer stays up until Ctrl-C, which saves the tuned results and prints
+  the flags. This tunes a recording offline (`--source … --accumulate latest`).
+- **Algorithm-agnostic runner:** an `Algorithm` declares its tunable parameters (`live_params`,
+  `retune`, `tuned_flags`); `apps/control.py` holds the rest.
+- **Snapshot metadata:** it now also carries C12 and φ12.
+
 **Sessions: one layout and one standard analysis for every recorded session.**
 
 - **Layout:** `sessions/<date>_<specimen>/`, with `session.json` (the recordings, their

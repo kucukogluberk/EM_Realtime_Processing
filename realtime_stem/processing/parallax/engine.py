@@ -348,12 +348,7 @@ class ParallaxAccumulator:
         self._pass = -1
         self._pass_closed = False
         self._front: dict | None = None
-        # "swap": for each output row, the last scan row whose shifted deposits land on it (the
-        # torus wrap included; -1: none). The row is complete once the cursor is past that row.
-        dys = np.unique(shifts[:, 0])
-        y = np.arange(self._nyu)[:, None]
-        src = (y - dys[None, :]) % self._nyu
-        self._row_source = np.where(src % self._u == 0, src // self._u, -1).max(axis=1)
+        self._row_source = self._rows_from(shifts)
         self.readout_config = readout if readout is not None else ReadoutConfig()
         self._readout: Readout | None = None
 
@@ -548,12 +543,53 @@ class ParallaxAccumulator:
             visits.index_add_(0, pos, torch.ones_like(pos, dtype=torch.float32))
         bf_sum += i_bf.sum(dim=0)
 
+        self._scatter(i_bf, pos, out)
+
+    def _scatter(self, i_bf: torch.Tensor, pos: torch.Tensor, out: torch.Tensor) -> None:
+        """Add each position's bright-field values (B, M) at its parallax-shifted output pixels,
+        wrapped on the output torus."""
         yt = (pos // self._nx) * self._u                       # (B,)
         xt = (pos % self._nx) * self._u
         oy = (yt.view(-1, 1) + self._sy.view(1, -1)) % self._nyu   # (B, M)
         ox = (xt.view(-1, 1) + self._sx.view(1, -1)) % self._nxu
         flat = (oy * self._nxu + ox).reshape(-1)               # (B*M,)
         out.index_add_(0, flat, i_bf.reshape(-1))
+
+    def _rows_from(self, shifts: np.ndarray) -> np.ndarray:
+        """"swap": for each output row, the last scan row whose shifted deposits land on it (the
+        torus wrap included; -1: none). The row is complete once the cursor is past that row."""
+        dys = np.unique(np.asarray(shifts)[:, 0])
+        y = np.arange(self._nyu)[:, None]
+        src = (y - dys[None, :]) % self._nyu
+        return np.where(src % self._u == 0, src // self._u, -1).max(axis=1)
+
+    def set_geometry(self, geometry: ParallaxGeometry, chunk: int = 4096) -> str:
+        """Re-shift with another geometry while running: new C10, C12 or rotation, with the same
+        bright-field pixels and output grid. "latest" re-deposits every frame it holds, so the
+        image is at once what the new geometry gives for them; the other modes keep no frames,
+        so their image (and "reset" / "swap"'s last completed pass) restarts. Returns which."""
+        if (not np.array_equal(np.asarray(geometry.bf_flat_inds),
+                               np.asarray(self.geometry.bf_flat_inds))
+                or tuple(geometry.upsampled_scan_gpts) != self.upsampled_scan_gpts):
+            raise ValueError("a new geometry must keep the bright-field pixels and the output "
+                             "grid: only C10, C12 and the rotation can change while running")
+        shifts = np.asarray(geometry.shifts)
+        self.geometry = geometry
+        self._sy = torch.as_tensor(shifts[:, 0], dtype=torch.long, device=self.device)
+        self._sx = torch.as_tensor(shifts[:, 1], dtype=torch.long, device=self.device)
+        self._row_source = self._rows_from(shifts)
+        self._readout = None                                   # χ of the phase flip
+        self.out.zero_()
+        if self.accumulate == "latest" and self._store is not None:
+            held = torch.nonzero(self._visits > 0).squeeze(1)
+            for pos in held.split(chunk):
+                self._scatter(self._as_float(self._store[pos], self._store_kind), pos, self.out)
+            return f"re-rendered the {held.numel():,} frames held"
+        self._visits.zero_()
+        self._bf_sum.zero_()
+        self._n_frames = 0
+        self._front = None
+        return "restarted the image (only --accumulate latest keeps the frames to re-render)"
 
     def _late(self, raw: torch.Tensor, kind: str, idx: torch.Tensor) -> None:
         """Frames of a pass already closed (a connection's stragglers past the boundary): into
@@ -707,6 +743,8 @@ class ParallaxAccumulator:
             "C10": float(geo.aberration_coefs.get("C10", 0.0)),
             "rotation_deg": (0.0 if geo.rotation_angle is None
                              else round(float(np.rad2deg(geo.rotation_angle)), 6)),
+            "C12": float(geo.aberration_coefs.get("C12", 0.0)),
+            "phi12_deg": round(float(np.rad2deg(geo.aberration_coefs.get("phi12", 0.0))), 6),
             "upsampling": self._u,
             # output pixel size (y, x) in Å: scale bars and d-spacings in the viewers
             "sampling_A": [float(v) for v in geo.upsampled_scan_sampling],

@@ -12,7 +12,12 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
              font: 13px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif; }
 body { display: grid; grid-template-columns: 300px 1fr; }
 aside { overflow-y: auto; border-right: 1px solid var(--border); padding: 8px 12px 16px; background: var(--side); }
-aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 12px 0 4px; }
+aside summary { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+                margin: 10px 0 4px; cursor: pointer; user-select: none; }
+aside summary:hover { color: var(--fg); }
+.tune input[type=range] { flex: 1; width: auto; }
+.tune input[type=number] { width: 72px; }
+.tune > label:first-child { flex: none; width: 62px; }
 .row { display: flex; align-items: center; gap: 6px; margin: 5px 0; }
 .row > label:first-child { flex: 1; }
 .row input[type=range] { width: 120px; }
@@ -59,40 +64,53 @@ main { position: relative; display: grid; gap: 6px; padding: 6px; overflow: hidd
   <div id="progress"><div></div></div>
   <div id="metaline" class="mono"></div>
 
-  <h2>Image</h2>
-  <div class="row" id="baserow"><label>channel</label><select id="base"></select></div>
-  <div class="row"><label class="row" style="margin:0" title="the visible square, at native pixels; a dashed outline marks it on the image">
-    <input type="checkbox" id="fft"> Fourier transform</label>
-    <button id="fit" title="fit the image (f, or double-click)">Fit</button><button id="one" title="native pixels (1)">1:1</button></div>
+  <details id="sec-tune" open hidden><summary title="The command line's values are the starting point (the target to meet with the microscope's knobs); fine-tune them here. With accumulate latest a change re-renders the frames held at once; the other modes restart their image.">Reconstruction</summary>
+    <div id="tuneparams"></div>
+    <div class="row" id="moderow"><label>accumulate</label><select id="mode"></select></div>
+    <div class="row"><span id="c12polar" class="muted mono" style="flex:1"></span>
+      <button id="tunereset" title="back to the command line's values">reset</button>
+      <button id="tuneflags" title="copy the run.py flags for these values">copy flags</button></div>
+    <div id="tunenote" class="hint"></div>
+  </details>
 
-  <h2 title="The Fourier transform shows the filters too. The phase flip only changes signs, so it leaves the power spectrum as it is.">Filters</h2>
-  <label class="row" id="fliprow" title="sign(sin χ(q)) on the parallax sum: the pipeline's phase_flipped channel">
-    <input type="checkbox" id="flip"> phase flip</label>
-  <div class="row" title="logarithmic, from 2 Å to the field of view"><label>high-pass σ</label><input type="range" id="hp" min="0" max="100" step="1" value="0"><output id="hp_o"></output></div>
-  <div class="row" title="logarithmic, from 0.1 Å to 20 Å"><label>low-pass σ</label><input type="range" id="lp" min="0" max="100" step="1" value="0"><output id="lp_o"></output></div>
+  <details id="sec-image" open><summary>Image</summary>
+    <div class="row" id="baserow"><label>channel</label><select id="base"></select></div>
+    <div class="row"><label class="row" style="margin:0" title="the visible square, at native pixels; a dashed outline marks it on the image">
+      <input type="checkbox" id="fft"> Fourier transform</label>
+      <button id="fit" title="fit the image (f, or double-click)">Fit</button><button id="one" title="native pixels (1)">1:1</button></div>
+  </details>
 
-  <h2>Contrast</h2>
-  <div class="row"><label>limits from</label>
-    <select id="cmode"><option value="frame">whole frame</option><option value="view">visible view</option>
-      <option value="manual">manual</option></select></div>
-  <div class="row"><label>low %</label><input type="range" id="plo" min="0" max="10" step="0.05" value="0.5"><output id="plo_o"></output></div>
-  <div class="row"><label>high %</label><input type="range" id="phi" min="90" max="100" step="0.05" value="99.5"><output id="phi_o"></output></div>
-  <div class="row"><label>min / max</label><input type="number" id="mlo" step="any"><input type="number" id="mhi" step="any"></div>
-  <canvas id="hist" title="drag a blue line to set the limits by hand"></canvas>
-  <div class="row"><label>gamma</label><input type="range" id="gamma" min="0.25" max="3" step="0.05" value="1"><output id="gamma_o"></output></div>
-  <div class="row"><label>colour map</label><select id="cmap"></select></div>
-  <label class="row"><input type="checkbox" id="invert"> invert</label>
+  <details id="sec-filters" open><summary title="The Fourier transform shows the filters too. The phase flip only changes signs, so it leaves the power spectrum as it is.">Filters</summary>
+    <label class="row" id="fliprow" title="sign(sin χ(q)) on the parallax sum: the pipeline's phase_flipped channel">
+      <input type="checkbox" id="flip"> phase flip</label>
+    <div class="row" title="logarithmic, from 2 Å to the field of view"><label>high-pass σ</label><input type="range" id="hp" min="0" max="100" step="1" value="0"><output id="hp_o"></output></div>
+    <div class="row" title="logarithmic, from 0.1 Å to 20 Å"><label>low-pass σ</label><input type="range" id="lp" min="0" max="100" step="1" value="0"><output id="lp_o"></output></div>
+  </details>
 
-  <h2>History</h2>
-  <label class="row"><input type="checkbox" id="pause"> pause (space)</label>
-  <div class="row"><input type="range" id="scrub" min="0" max="0" step="1" value="0" style="flex:1;width:auto">
-    <button id="live">live</button></div>
-  <div id="histlabel" class="muted mono"></div>
+  <details id="sec-contrast" open><summary>Contrast</summary>
+    <div class="row"><label>limits from</label>
+      <select id="cmode"><option value="frame">whole frame</option><option value="view">visible view</option>
+        <option value="manual">manual</option></select></div>
+    <div class="row"><label>low %</label><input type="range" id="plo" min="0" max="10" step="0.05" value="0.5"><output id="plo_o"></output></div>
+    <div class="row"><label>high %</label><input type="range" id="phi" min="90" max="100" step="0.05" value="99.5"><output id="phi_o"></output></div>
+    <div class="row"><label>min / max</label><input type="number" id="mlo" step="any"><input type="number" id="mhi" step="any"></div>
+    <canvas id="hist" title="drag a blue line to set the limits by hand"></canvas>
+    <div class="row"><label>gamma</label><input type="range" id="gamma" min="0.25" max="3" step="0.05" value="1"><output id="gamma_o"></output></div>
+    <div class="row"><label>colour map</label><label class="row" style="margin:0"><input type="checkbox" id="invert"> invert</label>
+      <select id="cmap"></select></div>
+  </details>
 
-  <h2>Save</h2>
-  <div class="row"><button id="png" title="the image as shown, with the Fourier transform if open">PNG of the view</button>
-    <button id="npy" title="the shown channel at full resolution, without the high-/low-pass">.npy (full)</button></div>
+  <details id="sec-history"><summary>History</summary>
+    <div class="row"><label class="row" style="margin:0;flex:none" title="space"><input type="checkbox" id="pause"> pause</label>
+      <input type="range" id="scrub" min="0" max="0" step="1" value="0" style="flex:1;width:auto">
+      <button id="live">live</button></div>
+    <div id="histlabel" class="muted mono"></div>
+  </details>
 
+  <details id="sec-save"><summary>Save</summary>
+    <div class="row"><button id="png" title="the image as shown, with the Fourier transform if open">PNG of the view</button>
+      <button id="npy" title="the shown channel at full resolution, without the high-/low-pass">.npy (full)</button></div>
+  </details>
 </aside>
 <main id="panels"><div id="empty">waiting for a snapshot…</div></main>
 
@@ -571,6 +589,7 @@ function onState(st) {
   const rate = S.arrivals.length > 1 ? (S.arrivals.length - 1) / ((now - S.arrivals[0]) / 1000) : 0;
   $("rate").textContent = `${rate.toFixed(1)} /s`;
   $("head").title = st.endpoint || "";
+  showControl(st);
   if (!S.paused) show(st); else updateMeta();
 }
 // URL parameters preset the controls, e.g. ?flip=1&fft=1&hp=20&cmap=inferno&view=1to1;
@@ -590,7 +609,7 @@ function applyParams() {
 function connect() {
   if (URLP.has("snapshot")) {
     const seq = URLP.get("snapshot");
-    fetch(seq ? `state?seq=${seq}` : "state").then((r) => r.json()).then((st) => { S.paused = true; S.latest = st; show(st); })
+    fetch(seq ? `state?seq=${seq}` : "state").then((r) => r.json()).then((st) => { S.paused = true; S.latest = st; showControl(st); show(st); })
       .catch(() => {});
     $("dot").style.background = "var(--muted)";
     return;
@@ -703,6 +722,65 @@ function exportPng() {
   cv.toBlob((b) => { const a = document.createElement("a"); a.href = URL.createObjectURL(b);
     a.download = `realtime-stem_${S.shown.seq}_${chan()}${S.fft ? "_fft" : ""}.png`; a.click(); });
 }
+// ── live control of the reconstruction (run.py --viewer-port) ──────────────────
+const T = {state: null, loaded: false, timer: null, pending: {}};
+const DIGITS = {c10: 1, rotation: 2, c12a: 1, c12b: 1};
+function showControl(st) {
+  if (!st.control || T.loaded) return;
+  T.loaded = true; $("sec-tune").hidden = false;
+  fetch("params").then((r) => r.json()).then((p) => { T.state = p; buildTune(); }).catch(() => {});
+}
+function buildTune() {
+  const box = $("tuneparams"); box.innerHTML = "";
+  for (const prm of T.state.params) {
+    const init = T.state.initial[prm.name], row = document.createElement("div");
+    row.className = "row tune";
+    row.innerHTML = `<label title="${prm.label} (${prm.unit}); from the command line: ${init}">${prm.label}</label>` +
+      `<input type="range" min="${init - prm.span}" max="${init + prm.span}" step="${prm.step}">` +
+      `<input type="number" step="${prm.step}"><span class="muted">${prm.unit}</span>`;
+    const [slider, field] = row.querySelectorAll("input");
+    slider.dataset.name = field.dataset.name = prm.name;
+    slider.addEventListener("input", () => { field.value = (+slider.value).toFixed(DIGITS[prm.name] ?? 2); sendTune({[prm.name]: +slider.value}); });
+    field.addEventListener("change", () => { slider.value = field.value; sendTune({[prm.name]: +field.value}); });
+    box.appendChild(row);
+  }
+  const sel = $("mode"); sel.innerHTML = "";
+  for (const m of T.state.modes) { const o = document.createElement("option"); o.value = o.textContent = m; sel.appendChild(o); }
+  $("moderow").style.display = T.state.modes.length ? "flex" : "none";
+  refreshTune();
+}
+function refreshTune() {                          // show the values the pipeline now uses
+  const st = T.state; if (!st) return;
+  for (const prm of st.params) for (const el of $("tuneparams").querySelectorAll(`input[data-name="${prm.name}"]`)) {
+    if (document.activeElement === el) continue;
+    el.value = el.type === "number" ? (+prm.value).toFixed(DIGITS[prm.name] ?? 2) : prm.value;
+  }
+  if (st.modes.length) $("mode").value = st.mode;
+  const v = Object.fromEntries(st.params.map((p) => [p.name, p.value]));
+  $("c12polar").textContent = "c12a" in v ? `C12 ${Math.hypot(v.c12a, v.c12b).toFixed(1)} Å at ` +
+    `${(Math.atan2(v.c12b, v.c12a) * 90 / Math.PI).toFixed(1)}°` : "";
+  $("tunenote").textContent = st.note || "";
+}
+function sendTune(changes) {
+  Object.assign(T.pending, changes);
+  clearTimeout(T.timer);
+  T.timer = setTimeout(async () => {
+    const body = JSON.stringify(T.pending); T.pending = {};
+    try {
+      const r = await fetch("params", {method: "POST", body, headers: {"Content-Type": "application/json"}});
+      const st = await r.json();
+      if (r.ok) { T.state = st; refreshTune(); } else $("tunenote").textContent = st.error || "refused";
+    } catch (err) { $("tunenote").textContent = `${err}`; }
+  }, 200);
+}
+function bindSections() {                         // remember which sections are open
+  for (const d of document.querySelectorAll("aside details")) {
+    try { const v = localStorage.getItem(`rs-${d.id}`); if (v !== null) d.open = v === "1"; } catch (e) { /* no storage */ }
+    d.addEventListener("toggle", () => { try { localStorage.setItem(`rs-${d.id}`, d.open ? "1" : "0"); } catch (e) { /* no storage */ }
+      drawHist(); });
+  }
+}
+
 function bind() {
   const on = (id, ev, f) => $(id).addEventListener(ev, f);
   const setOut = () => { $("plo_o").textContent = `${S.pLo}`; $("phi_o").textContent = `${S.pHi}`; $("gamma_o").textContent = `${S.gamma}`; };
@@ -744,6 +822,14 @@ function bind() {
     if (e.key === "f") { fitAll(); redraw(); schedule(); }
     if (e.key === "1") { oneToOne(); redraw(); schedule(); }
   });
+  on("mode", "change", (e) => sendTune({mode: e.target.value}));
+  on("tunereset", "click", () => sendTune({reset: true}));
+  on("tuneflags", "click", () => {
+    const text = T.state ? T.state.flags : "";
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(
+      () => { $("tunenote").textContent = `copied: ${text}`; }, () => { prompt("run.py flags", text); });
+  });
+  bindSections();
   bindHistDrag();
   setOut();
 }

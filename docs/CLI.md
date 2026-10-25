@@ -46,17 +46,18 @@ usage: python -m realtime_stem.apps.run [-h] [--algorithm {parallax}]
                                         [--pass-average BETA] [--save-passes]
                                         [--save-passes-dtype {float32,float16}] [--continuous]
                                         [--rounds N] [--live-endpoint LIVE_ENDPOINT]
-                                        [--live-every S] [--live-every-rows N] [--out-dir OUT_DIR]
-                                        [--detector HY HX] [--binned] [--defocus C10_ANG]
-                                        [--rotation DEG] [--c12 C12_ANG] [--phi12 DEG]
-                                        [--upsampling U] [--energy EV] [--semiangle MRAD]
-                                        [--angular-sampling MRAD_PX] [--scan-sampling ANG_PX]
-                                        [--center ROW COL] [--scan NY NX] [--flip-cols]
-                                        [--detector-layout LAYOUT] [--subtract-frame-mean]
-                                        [--no-phase-flip] [--no-dc-correct] [--normalize]
-                                        [--coverage] [--lowpass Q] [--highpass Q]
-                                        [--butterworth-order N] [--suppress-nyquist {auto,on,off}]
-                                        [--band-limit]
+                                        [--live-every S] [--live-every-rows N]
+                                        [--viewer-port PORT] [--viewer-host VIEWER_HOST]
+                                        [--out-dir OUT_DIR] [--detector HY HX] [--binned]
+                                        [--defocus C10_ANG] [--rotation DEG] [--c12 C12_ANG]
+                                        [--phi12 DEG] [--upsampling U] [--energy EV]
+                                        [--semiangle MRAD] [--angular-sampling MRAD_PX]
+                                        [--scan-sampling ANG_PX] [--center ROW COL] [--scan NY NX]
+                                        [--flip-cols] [--detector-layout LAYOUT]
+                                        [--subtract-frame-mean] [--no-phase-flip]
+                                        [--no-dc-correct] [--normalize] [--coverage] [--lowpass Q]
+                                        [--highpass Q] [--butterworth-order N]
+                                        [--suppress-nyquist {auto,on,off}] [--band-limit]
 ```
 
 **general**
@@ -97,6 +98,8 @@ usage: python -m realtime_stem.apps.run [-h] [--algorithm {parallax}]
 | `--live-endpoint LIVE_ENDPOINT` | `` | If set (e.g. tcp://127.0.0.1:5601, or tcp://0.0.0.0:5601 for other machines), PUB live snapshots of the reconstruction. Empty = none. |
 | `--live-every S` | `0.2` | Minimum seconds between live snapshots (0.2 = ~5 Hz). |
 | `--live-every-rows N` | `0` | Publish a live snapshot every N scan rows instead of every --live-every seconds (0 = time-based). |
+| `--viewer-port PORT` | `0` | Serve the browser viewer from this process on PORT (e.g. 8050), with live control of the reconstruction: the algorithm's parameters (parallax: C10, rotation, C12) start from the command line's and can be fine-tuned from the page, and the --accumulate mode switched. With --accumulate latest a change re-renders the frames held at once. The viewer stays up after the run until Ctrl-C. 0 = none (a separate viewer can still subscribe to --live-endpoint). |
+| `--viewer-host VIEWER_HOST` | `127.0.0.1` | Address the viewer listens on (0.0.0.0 for other machines; or forward the port over ssh). |
 
 **output**
 

@@ -241,6 +241,38 @@ into the Holoscan container: it would replace the image's CUDA build of torch.
 `python -m realtime_stem.streaming.web tcp://<host>:5601` subscribes to the live stream and
 serves a page at http://127.0.0.1:8050.
 
+Or let `run.py --viewer-port 8050` serve the same page from inside the pipeline: one command
+instead of two, and the page then also tunes the reconstruction (below).
+
+### Tuning the reconstruction from the page (`run.py --viewer-port`)
+
+The command line's values stay the target, met by turning the microscope's knobs. The
+page's Reconstruction section fine-tunes what the knobs can't easily reach: the rotation above
+all, which would otherwise need a scan rotation.
+
+- **What it tunes:** C10, the rotation, and C12 as Cartesian components a = C12 cos 2φ12,
+  b = C12 sin 2φ12 (like stigmators; the polar values are shown). It can also switch the
+  `--accumulate` mode of a repeated scan.
+  - Each has a slider about its command-line value and a number field.
+  - "reset" goes back to the command line's values.
+  - "copy flags" gives the `run.py` flags of the values now in use.
+- **How a change is applied:** between batches (a lock shared with the ingest), and into the
+  run's arguments, so later scans and the saved results use it. A snapshot is published at
+  once, even with no frames arriving.
+  - `--accumulate latest` re-deposits every frame it holds with the new shifts: the image is
+    at once exactly what the new values give. On an M4 Pro that takes ~0.2 s for a 256² scan at
+    ×4.
+  - The other modes keep no frames, so their image restarts and fills in within a pass.
+  - A new mode starts a new image.
+- **After the run:** the viewer stays up until Ctrl-C. Tuned results are saved again on exit,
+  and the tuned flags are printed.
+  - So `run.py --source scan.dstream … --accumulate latest --viewer-port 8050` tunes a
+    recording offline.
+- **Under the hood:** the algorithm declares what is tunable (`Algorithm.live_params`,
+  `retune`, `tuned_flags`) and the runner stays algorithm-agnostic (`apps/control.py`). For
+  parallax, `ParallaxAccumulator.set_geometry` re-shifts. The bright-field pixels (centre,
+  semiangle, angular sampling) can't change while running.
+
 - **Only the screen crosses the wire.** The page asks for the region it shows, at the size it
   shows it (`/view`).
   - The server averages blocks of pixels down to about the screen's resolution, and sends native

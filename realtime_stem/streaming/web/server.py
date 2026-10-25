@@ -24,6 +24,8 @@ Endpoints (all GET):
                      /view; of a partly scanned image, only its finished rows (X-Rows: those used).
                      The page applies the filters itself (|H(q)|² on the spectrum it has)
     /npy             ?seq&ch: one channel at full resolution, as .npy
+    /params          GET the live control's state; POST {name: value, …, "mode": …} or
+                     {"reset": true} to change the running reconstruction (run.py --viewer-port)
 """
 
 from __future__ import annotations
@@ -256,6 +258,7 @@ def encode(data: np.ndarray) -> tuple[bytes, float, float]:
 class _Handler(BaseHTTPRequestHandler):
     store: FrameStore = None          # set by make_server
     endpoint: str = ""
+    control = None                    # a live control (apps/control.py) when run.py serves the page
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):     # quiet: the page polls /view a lot
@@ -320,8 +323,27 @@ class _Handler(BaseHTTPRequestHandler):
     def _get_state(self, url, q):
         frame = self.store.get(int(q["seq"][0]) if "seq" in q else None)
         if frame is None:
-            return self._json({"seq": -1, "endpoint": self.endpoint, "history": []})
-        self._json({**self.store.state(frame), "endpoint": self.endpoint})
+            return self._json({"seq": -1, "endpoint": self.endpoint, "history": [],
+                               "control": self.control is not None})
+        self._json({**self.store.state(frame), "endpoint": self.endpoint,
+                    "control": self.control is not None})
+
+    def _get_params(self, url, q):
+        if self.control is None:
+            return self._error(404, "no live control: run.py --viewer-port serves one")
+        self._json(self.control.state())
+
+    def do_POST(self):
+        url = urlsplit(self.path)
+        try:
+            if url.path.rstrip("/") != "/params" or self.control is None:
+                return self._error(404, f"no such path {url.path}")
+            body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self._json(self.control.update(json.loads(body or b"{}")))
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except (KeyError, ValueError, TypeError) as exc:
+            self._error(400, f"{type(exc).__name__}: {exc}")
 
     def _get_events(self, url, q):
         self.send_response(200)
@@ -336,7 +358,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self.wfile.write(b": keep-alive\n\n")
             else:
                 last = frame.seq
-                body = json.dumps({**self.store.state(frame), "endpoint": self.endpoint})
+                body = json.dumps({**self.store.state(frame), "endpoint": self.endpoint,
+                                   "control": self.control is not None})
                 self.wfile.write(b"data: " + body.encode() + b"\n\n")
             self.wfile.flush()
 
@@ -383,10 +406,39 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def make_server(store: FrameStore, host: str = "127.0.0.1", port: int = 8050,
-                endpoint: str = "") -> ThreadingHTTPServer:
-    handler = type("Handler", (_Handler,), {"store": store, "endpoint": endpoint})
+                endpoint: str = "", control=None) -> ThreadingHTTPServer:
+    """The viewer's HTTP server over `store`; with a `control` (state() → dict, update(dict) →
+    dict) the page also offers the reconstruction's live parameters (/params)."""
+    handler = type("Handler", (_Handler,), {"store": store, "endpoint": endpoint,
+                                            "control": control})
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True
+    return server
+
+
+class StorePublisher:
+    """A publisher (`LivePublisher`'s interface) that puts snapshots straight into a FrameStore:
+    the viewer served from inside run.py (--viewer-port) needs no socket."""
+
+    def __init__(self, store: FrameStore):
+        self.store, self._seq = store, 0
+
+    def publish(self, arr, *, final: bool = False, channels=None, meta=None) -> int:
+        self.store.put(np.asarray(arr), {"channels": channels, "final": final, "meta": meta,
+                                         "seq": self._seq})
+        self._seq += 1
+        return self._seq - 1
+
+    def close(self) -> None:
+        pass
+
+
+def serve(store: FrameStore, host: str, port: int, endpoint: str = "", control=None):
+    """Start the viewer's server on a daemon thread; returns the server (its address is
+    server.server_address)."""
+    server = make_server(store, host, port, endpoint=endpoint, control=control)
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.2}, daemon=True,
+                     name="viewer").start()
     return server
 
 

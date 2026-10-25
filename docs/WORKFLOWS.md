@@ -27,6 +27,9 @@ open http://127.0.0.1:8050:
 python -m realtime_stem.streaming.web tcp://127.0.0.1:5601
 ```
 
+Or give `run.py` `--viewer-port 8050`: the pipeline serves the page itself, and the page can also
+tune the reconstruction (see [Tune it live](#tune-it-live)).
+
 - **Navigation:** one image, the parallax reconstruction. Wheel to zoom, drag to pan,
   double-click or `f` to fit, `1` for native pixels.
 - **Filters:** the phase flip, and high- and low-pass with σ in Å (logarithmic sliders; the
@@ -122,6 +125,26 @@ then the feeder:
 ```bash
 python -m tools.replay_to_zmq scan.dstream --endpoint tcp://127.0.0.1:5555 --rate 20000
 ```
+
+## Tune it live
+
+`--viewer-port` puts a Reconstruction section on the page. It holds C10, the rotation and C12 as
+stigmator-like a/b components, each with a slider about its command-line value, plus the
+`--accumulate` mode of a repeated scan.
+
+```bash
+python -m realtime_stem.apps.run --ingest python --device mps --endpoint tcp://127.0.0.1:5555 \
+    $(cat scan.flags) --upsampling 4 --accumulate latest --continuous --viewer-port 8050
+```
+
+- **Applying changes:** with `latest` a change re-renders the frames held at once (~0.2 s for a
+  256² scan at ×4 on an M4 Pro); the other modes restart their image.
+- **Keeping the result:** "copy flags" gives the tuned `run.py` flags. The command line's values
+  remain the target for the microscope's knobs; tune here what the knobs can't easily reach,
+  such as the rotation.
+- **Offline:** on a recording, `--source scan.dstream --accumulate latest --viewer-port 8050`
+  keeps the viewer up after the replay. Tune, then Ctrl-C saves the tuned image and prints its
+  flags.
 
 ## Repeated scans: loop a recording
 
