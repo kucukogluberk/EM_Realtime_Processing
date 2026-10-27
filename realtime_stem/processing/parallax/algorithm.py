@@ -265,8 +265,8 @@ class ParallaxAlgorithm(Algorithm):
         follower = getattr(acc, "obf", None)
         if follower is not None and follower.enabled:
             if tag:
-                print(f"[obf] saving its latest image ({follower.state}, {follower.pending} "
-                      f"positions pending)", flush=True)
+                print(f"[obf] saving its latest image ({follower.state}, "
+                      f"{100 * follower.coverage:.0f}% of the frames held covered)", flush=True)
             else:
                 print("[obf] finishing the image of every frame held …", flush=True)
                 follower.finalize()

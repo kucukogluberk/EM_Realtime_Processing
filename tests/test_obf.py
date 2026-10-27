@@ -295,6 +295,21 @@ def test_a_slow_setup_never_holds_the_ingest(monkeypatch):
         acc.close()
 
 
+def test_a_continuous_run_saves_obf_between_series_without_waiting(tmp_path):
+    """Between the series of a continuous run (a tag) the latest OBF image is saved as it is."""
+    from realtime_stem.processing.parallax.algorithm import ParallaxAlgorithm
+
+    acc = ParallaxAccumulator(_geometry(), device="cpu", accumulate="latest", wrap_ids=True)
+    follower = ObfFollower(acc, live_every=0.02)
+    try:
+        _feed(acc, passes=1)
+        follower.finalize(timeout=60)
+        ParallaxAlgorithm().save(acc, tmp_path, tag="scan002")
+        assert (tmp_path / "parallax_obf_scan002.npy").exists()
+    finally:
+        acc.close()
+
+
 def test_runner_saves_obf(tmp_path):
     """run.py --compute-obf on a replayed capture (a pass and a bit): parallax_obf.npy is the OBF of the
     frames held at the end, and the live stream carried the channel."""

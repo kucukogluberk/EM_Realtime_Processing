@@ -76,6 +76,15 @@ def _turn():
     time.sleep(5e-4)
 
 
+@contextlib.contextmanager
+def _hold():
+    """The worker's hold of ACC_LOCK to read the store, then a pause: a lock is not fair, and
+    without it the worker would take it straight back from a waiting ingest."""
+    with ACC_LOCK:
+        yield
+    time.sleep(2e-4)
+
+
 def _cache_get(key) -> ObfSetup | None:
     with _SETUPS_LOCK:
         if key in _SETUPS:
@@ -338,12 +347,18 @@ class ObfFollower:
             self._idle()                             # no frames held yet
             return
         final = self._final
-        t0, n_done = time.perf_counter(), 0
+        step = self._step_size(setup)
+        t0, n_done, n = time.perf_counter(), 0, 0
         while True:
             self._check(setup)
-            n = self._front(setup) + self._update(setup) + self._back(setup)
+            work = self._gather(setup)
+            n = self._fold(setup, *work) if work is not None else 0
             n_done += n
-            if not n or (final is None and time.perf_counter() - t0 > self.budget):
+            # a little at a time (following the scan): at the live cadence, not chunk by chunk,
+            # which would take the lock from the ingest for every few frames
+            if final is None and (n < step // 4 or time.perf_counter() - t0 > self.budget):
+                break
+            if not n:
                 break
         if n_done:
             self._sync()
@@ -360,7 +375,7 @@ class ObfFollower:
             self._buffer = None                      # new means: the coverage restarts
             return
         self._publish(setup)
-        if not n_done:
+        if n < step // 4:
             self._idle()
 
     def _release(self, final) -> None:
@@ -479,84 +494,59 @@ class ObfFollower:
         with ACC_LOCK:
             return (total / max(int(held.numel()), 1)).clone()
 
-    def _take(self, idx: np.ndarray) -> tuple[torch.Tensor, torch.Tensor]:
-        """The store's rows at `idx`, read under the lock (which the caller holds), their marks
-        cleared."""
-        index = torch.as_tensor(idx, device=self.device)
-        new = self.acc._store[index]
-        self.acc._obf_dirty[index] = False
-        return index, new
-
-    def _front(self, setup: ObfSetup) -> int:
-        """Cover the positions written since the coverage started, from `hi` on (the scan line)."""
+    def _gather(self, setup: ObfSetup):
+        """One hold of the lock: the positions to cover at the scan line (written since the
+        coverage started, from `hi` on), the frames held behind the coverage (before `lo`,
+        newest first) and covered positions written again, their store rows copied and their
+        marks cleared. None when there is nothing to do."""
         step = self._step_size(setup)
-        idx = (self._hi + np.arange(step)) % self.n
-        with ACC_LOCK:
-            dirty = self.acc._obf_dirty
-            if dirty is None:
-                return 0
-            marked = dirty[torch.as_tensor(idx, device=self.device)].cpu().numpy()
-            k = _prefix(marked & ~self._seen[idx])
-            if not k:
-                return 0
-            index, new = self._take(idx[:k])
-        self._hi = int((self._hi + k) % self.n)
-        self._cover(setup, idx[:k], index, new)
-        return k
+        with _hold():
+            acc = self.acc
+            dirty, store = acc._obf_dirty, acc._store
+            if dirty is None or store is None:
+                return None
+            marked = dirty.cpu().numpy()
+            held = (acc._visits > 0).cpu().numpy()
+            unseen = ~self._seen
+            front = (self._hi + np.arange(step)) % self.n
+            front = front[:_prefix(marked[front] & unseen[front])]
+            back = (self._lo - 1 - np.arange(step)) % self.n
+            k_back = _prefix(held[back] & unseen[back])
+            back = back[:k_back]
+            back = back[~np.isin(back, front)]      # the last gap, reached from both sides
+            again = np.flatnonzero(marked & self._seen)
+            if again.size:                           # round-robin, so none starves
+                start = int(np.searchsorted(again, self._cursor))
+                again = np.concatenate((again[start:], again[:start]))[:step]
+            fresh = np.concatenate((front, back))
+            if not (fresh.size or again.size):
+                return None
+            index = torch.as_tensor(np.concatenate((fresh, again)), device=self.device)
+            rows = store[index]
+            dirty[index] = False
+        self._hi = int((self._hi + front.size) % self.n)
+        self._lo = int((self._lo - k_back) % self.n)
+        if again.size:
+            self._cursor = int((again[-1] + 1) % self.n)
+        return fresh, again, index, rows
 
-    def _back(self, setup: ObfSetup) -> int:
-        """Cover the frames held before `lo`, newest first."""
-        step = self._step_size(setup)
-        idx = (self._lo - 1 - np.arange(step)) % self.n
-        with ACC_LOCK:
-            if self.acc._obf_dirty is None:
-                return 0
-            held = (self.acc._visits[torch.as_tensor(idx, device=self.device)] > 0).cpu().numpy()
-            k = _prefix(held & ~self._seen[idx])
-            if not k:
-                return 0
-            index, new = self._take(idx[:k])
-        self._lo = int((self._lo - k) % self.n)
-        self._cover(setup, idx[:k], index, new)
-        return k
-
-    def _update(self, setup: ObfSetup) -> int:
-        """Covered positions the scan wrote again: their new values minus those deposited."""
-        step = self._step_size(setup)
-        with ACC_LOCK:
-            dirty = self.acc._obf_dirty
-            if dirty is None:
-                return 0
-            cand = np.flatnonzero(dirty.cpu().numpy() & self._seen)
-            if not cand.size:
-                return 0
-            # round-robin from where the last chunk ended, so no position starves
-            start = int(np.searchsorted(cand, self._cursor))
-            idx = np.concatenate((cand[start:], cand[:start]))[:step]
-            index, new = self._take(idx)
-        self._cursor = int((idx[-1] + 1) % self.n)
-        self._handoff(index, new)
-        sfm = self.acc.subtract_frame_mean
+    def _fold(self, setup: ObfSetup, fresh: np.ndarray, again: np.ndarray, index: torch.Tensor,
+              rows: torch.Tensor) -> int:
+        """Deposit newly covered frames whole, and covered ones written again as new − old."""
+        self._handoff(index, rows)
+        sfm, k = self.acc.subtract_frame_mean, fresh.size
         with self._gpu():
-            old = self._shadow[index]
-            self._shadow[index] = new
-            values = normalize(_raw_float(new, self._kind), self._mean, sfm) \
-                - normalize(_raw_float(old, self._kind), self._mean, sfm)
+            values = normalize(_raw_float(rows, self._kind), self._mean, sfm)
+            if again.size:
+                old = self._shadow[index[k:]]
+                values[k:] -= normalize(_raw_float(old, self._kind), self._mean, sfm)
+                del old
+            self._shadow[index] = rows
             setup.deposit(self._buffer, values, index)
-            del values, old, new
+            del values, rows
+        self._seen[fresh] = True
         self._exact, self._changed = False, True
-        return int(idx.size)
-
-    def _cover(self, setup: ObfSetup, idx: np.ndarray, index: torch.Tensor,
-               new: torch.Tensor) -> None:
-        self._handoff(index, new)
-        with self._gpu():
-            self._shadow[index] = new
-            values = normalize(_raw_float(new, self._kind), self._mean, self.acc.subtract_frame_mean)
-            setup.deposit(self._buffer, values, index)
-            del values, new
-        self._seen[idx] = True
-        self._exact, self._changed = False, True
+        return int(index.numel())
 
     def _done_rows(self) -> np.ndarray:
         """(Ny·U,) the output rows that hold only covered frames: every scan row within the
