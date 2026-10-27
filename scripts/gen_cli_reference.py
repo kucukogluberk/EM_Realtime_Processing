@@ -79,6 +79,9 @@ INTROS = {
     "examples.probe": "Headless subscriber: report live frames, optionally save the last one.",
     "examples.plot_result": "Plot a saved reconstruction `.npy`.",
     "bench": "Time the parallax hot path and the live readout on the available torch devices.",
+    "bench_obf": "Time live OBF on the Gd2O3 session's geometry: the setup (the Gram), "
+                 "the deposit rate against the detector's, where a batch's time goes, and one "
+                 "readout.",
     "compare": "Compare the continuous modes on a looped capture: each mode's live image part-way "
                "through each pass against the true pass images.",
     "session": "The standard analysis of a session of recordings (`sessions/README.md`): "
@@ -103,6 +106,7 @@ SHORT = {
     "examples.probe": "headless live-stream probe",
     "examples.plot_result": "plot a saved result",
     "bench": "benchmark the accumulator",
+    "bench_obf": "benchmark live OBF",
     "compare": "compare the continuous modes",
     "session": "the standard analysis of a session of recordings",
 }
@@ -126,6 +130,10 @@ def _parsers():
     bench = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bench)
     out.append(("bench", bench.build_parser()))
+    spec = importlib.util.spec_from_file_location("bench_obf", REPO / "scripts" / "bench_obf.py")
+    bench_obf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bench_obf)
+    out.append(("bench_obf", bench_obf.build_parser()))
     spec = importlib.util.spec_from_file_location(
         "compare_accumulate", REPO / "scripts" / "compare_accumulate.py")
     compare = importlib.util.module_from_spec(spec)

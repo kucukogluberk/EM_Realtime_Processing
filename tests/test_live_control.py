@@ -32,7 +32,8 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 from realtime_stem.apps.control import LiveControl  # noqa: E402
-from realtime_stem.ingest.sink import BatchSink  # noqa: E402
+from realtime_stem.ingest.sink import ACC_LOCK, BatchSink  # noqa: E402
+from realtime_stem.processing.obf.core import geometry_key  # noqa: E402
 from realtime_stem.processing.parallax.algorithm import ParallaxAlgorithm  # noqa: E402
 from realtime_stem.processing.parallax.engine import ParallaxAccumulator, preprocess_geometry  # noqa: E402
 from realtime_stem.streaming.web.server import FrameStore, StorePublisher, make_server  # noqa: E402
@@ -156,6 +157,75 @@ def test_control_retunes_switches_modes_and_resets():
     for bad in ({"nope": 1}, {"mode": "scan"}):
         with pytest.raises(ValueError):
             control.update(bad)
+
+
+def _wait(cond, timeout=60.0):
+    deadline = time.monotonic() + timeout
+    while not cond() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return cond()
+
+
+def test_control_obf_weights_and_channel():
+    """OBF from the viewer: the "precompute OBF weights" switch builds the Gram for the geometry
+    and again after a retune, without reconstructing; the on-demand channel "obf" reconstructs
+    while it is shown; neither in a mode without a store; a mode switch stops the old follower;
+    reset restores the command line's."""
+    algo, args = _args("--accumulate", "latest")
+    for flag in ("--compute-obf", "--precompute-obf-weights"):
+        assert algo.check_args(_args(flag)[1]) == [f"{flag} needs --accumulate latest (OBF "
+                                                   "follows the frames its store holds)"]
+    pub = _Publisher()
+    control = LiveControl(algo, args, publisher=pub)
+    acc = algo.build(args)
+    sink = BatchSink(acc, live_publisher=pub, live_every=1e9)
+    control.attach(acc, lambda: sink)
+    frames = _frames(seed=8)
+    for s in range(0, _NPOS, 40):
+        sink.feed(frames[s:s + 40], np.arange(s, min(s + 40, _NPOS)))
+    state = control.state()
+    assert getattr(acc, "obf", None) is None
+    assert [(w["name"], w["value"]) for w in state["switches"]] == [("obf_weights", False)]
+    assert [(c["name"], c["active"]) for c in state["channels"]] == [("obf", False)]
+    try:
+        state = control.update({"obf_weights": True})            # the weights only
+        assert args.precompute_obf_weights and "--precompute-obf-weights" in state["flags"]
+        follower = acc.obf
+        assert not follower.enabled and _wait(lambda: follower.weights_state() == "ready")
+        assert follower._shadow is None and acc._obf_dirty is None    # nothing reconstructed
+        with ACC_LOCK:
+            _, names, meta = acc.snapshot()
+        assert "obf" not in names and meta["obf_weights_state"] == "ready"
+        control.update({"c10": -1.2e4})                          # a retune: the weights again
+        assert _wait(lambda: follower._setup.key == geometry_key(acc.geometry))
+        assert follower.weights_state() == "ready"
+
+        state = control.update({"obf": True})                    # OBF chosen in the channel list
+        assert args.compute_obf and follower.enabled and state["channels"][0]["active"]
+        assert pub.frames[-1][1]["channels"][-1] == "obf"         # there at once (zeros until ready)
+        assert follower.finalize(timeout=60) is not None
+        with ACC_LOCK:
+            assert acc.snapshot()[1][-1] == "obf"
+        control.update({"obf": False})                           # another channel chosen
+        assert not args.compute_obf and not follower.enabled
+        with ACC_LOCK:
+            assert "obf" not in acc.snapshot()[1]
+        control.update({"mode": "swap"})                         # a new accumulator …
+        assert control.acc.accumulate == "swap"
+        follower._thread.join(timeout=10)                        # … the old follower stops
+        assert not follower._thread.is_alive()
+        state = control.state()
+        assert not state["switches"][0]["available"] and not state["channels"][0]["available"]
+        for change in ({"obf": True}, {"obf_weights": True}):
+            with pytest.raises(ValueError, match="latest"):
+                control.update(change)
+    finally:
+        acc.close()
+        control.acc.close()
+    state = control.update({"reset": True})                      # the command line's: all off
+    assert state["mode"] == "latest" and not state["switches"][0]["value"]
+    assert not state["channels"][0]["active"] and not args.precompute_obf_weights
+    control.acc.close()
 
 
 def test_one_scan_has_no_mode_to_switch():
