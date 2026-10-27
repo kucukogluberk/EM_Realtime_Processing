@@ -23,6 +23,7 @@ realtime_stem/        the Python package
   apps/run.py           the program you run
   ingest/               receives the detector frames
   processing/parallax/  the parallax / tcBF reconstruction
+  processing/obf/       live optimum bright field beside it (OBF in the viewer's channel list)
   streaming/            publishes the live image
 operators/            the C++/CUDA frame receiver and GPU decompressor
 docker/Dockerfile     builds the Docker image

@@ -34,6 +34,13 @@ Three stages, each changeable on its own:
   `ParallaxAccumulator`: the scatter-add, `--accumulate` modes), `readout.py` (the live channels:
   phase flip, scan-mean removal, filters), `orientation.py` (the 8 detector layouts),
   `algorithm.py` (CLI wiring and saving results).
+- `realtime_stem/processing/obf/`: live optimum bright field beside parallax (with
+  `--accumulate latest`: the viewer's channel list or `--compute-obf`; its weights in the background
+  with `--precompute-obf-weights`). `core.py` is a torch port of quantem's correlation-route OBF
+  (`ObfSetup`: probe, canvas layout, Gram; `reconstruct_once`), `follower.py` the background thread
+  that follows the `latest` store (`ParallaxAccumulator._obf_dirty` marks new frames). quantem is
+  an offline oracle only (`sessions/2026-10-20_Gd2O3/analysis/obf_vs_quantem.py`), never a
+  dependency.
 - `tools/`: the `.dstream` recording format, a stream recorder (`record_stream.py`, host Python
   with pyzmq + cbor2; stop the pipeline while it records), a replay feeder (`replay_to_zmq.py`),
   a 4D-STEM simulator (`simulate_4dstem.py`), the geometry calibration from a recording
@@ -151,6 +158,9 @@ changing anything used live.
 - `--accumulate latest | all | reset | swap` map image id → position as `id % positions` (pass =
   `id // positions`), so they need exactly one frame per scan position; `latest` also needs
   `--batch-size` ≤ the scan positions, and `swap`'s live composite assumes raster order.
+- OBF never runs in `process()`: the ingest only marks positions, and the follower thread reads
+  the store under `ACC_LOCK`. On `mps` every OBF GPU call must hold `ACC_LOCK` (one thread at a
+  time on its command queue; two crash it).
 - A change to a command-line flag needs `python scripts/gen_cli_reference.py` (a test checks
   that `docs/CLI.md` is current).
 - The DCU's stream compression must be `bslz4`.
