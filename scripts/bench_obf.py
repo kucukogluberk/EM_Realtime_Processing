@@ -95,12 +95,13 @@ def _breakdown(setup: ObfSetup, values, pos, device, repeats) -> dict:
 
 
 def bench(device: str, preset: str, scan, upsampling: int, batches, repeats: int,
-          fft_sizes: bool) -> None:
+          fft_sizes: bool, full_band: bool = False) -> None:
     dev = torch.device(device)
     geo = geometry(preset, scan, upsampling)
     _sync(dev)
     t0 = time.perf_counter()
-    setup = ObfSetup.build(geo, device=dev, fft_sizes=fft_sizes)
+    setup = ObfSetup.build(geo, device=dev, fft_sizes=fft_sizes,
+                           **({"margin": None} if full_band else {}))
     _sync(dev)
     t_setup = time.perf_counter() - t0
     n_pos = scan[0] * scan[1]
@@ -154,6 +155,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repeats", type=int, default=10, help="Timed batches per measurement.")
     p.add_argument("--fft-sizes", action="store_true",
                    help="Round the canvas's pixels per field of view up to 2^a 3^b 5^c sizes.")
+    p.add_argument("--full-band", action="store_true",
+                   help="Patches holding OBF's whole band, as quantem does, instead of the output "
+                        "grid's band (the default, 2-4x faster per frame).")
     return p
 
 
@@ -164,7 +168,7 @@ def main() -> None:
     for dev in devices:
         for preset in args.preset:
             bench(dev, preset, args.scan, args.upsampling, args.batch, args.repeats,
-                  args.fft_sizes)
+                  args.fft_sizes, args.full_band)
 
 
 if __name__ == "__main__":

@@ -43,6 +43,11 @@ positions held (`normalize`). The departures from quantem are deliberate and sma
   CPU); with one column it is exact either way;
 - `fft_sizes=True` rounds the canvas's pixels per field of view up to a size the FFTs handle
   quickly (a finer canvas, the same band).
+- a patch holds only the band the output grid can show (its Nyquist box turned into the detector
+  frame, plus `BAND_MARGIN` pixels per field of view), not OBF's whole band, unless
+  `margin=None`. The patches, the detector-side correlations, the canvas and the Gram shrink with
+  it: on the binned Gd2O3 scan at x2, 3.8x faster per frame and 0.3% from the whole band. Each
+  patch's spectrum is then cut at its edge, which is all the difference.
 """
 
 from __future__ import annotations
@@ -71,6 +76,10 @@ _GRAM_POINTS_PER_BATCH = 4_194_304
 _POINTS_PER_BATCH = 4_194_304
 #: an overlap below this fraction of the peak, or a power below its square, is round-off
 OVERLAP_FLOOR = 1e-6
+#: pixels per probe field of view a patch holds beyond the output grid's Nyquist box (turned into
+#: the detector frame), rounded up to an FFT size. On the binned Gd2O3 scan it is 3.8x faster per
+#: frame than the whole band at x2 (2.4x at x4) and 0.3% from it (0.2% at x4); None: the band.
+BAND_MARGIN = 4
 
 
 # ── small helpers ──────────────────────────────────────────────────────────────
@@ -202,11 +211,15 @@ def _support(probe: np.ndarray) -> np.ndarray:
     return power > OVERLAP_FLOOR**2 * power.max()
 
 
-def _layout(canvas_shape, sampling, fov, reach, rotation):
+def _layout(canvas_shape, sampling, fov, reach, rotation, margin=None):
     """Where the frames land (quantem's `_correlation_layout`, its rotated branch): `multiples`
     probe fields of view per axis span a canvas of `per_fov` pixels to a field of view, covering
     the requested canvas turned into the detector frame, with room per side for half a field of
-    view (lattice) or half a patch, so nothing wraps onto it. `_finish_layout` adds the rest."""
+    view (lattice) or half a patch, so nothing wraps onto it. `_finish_layout` adds the rest.
+
+    A patch holds OBF's whole band (quantem's choice) unless `margin` is given: then only the
+    requested canvas's Nyquist box turned into the detector frame, and `margin` pixels per field
+    of view beyond it, so the patches and the detector-side correlations shrink."""
     sampling = np.asarray(sampling, dtype=np.float64)
     band = 4 * reach + 1                      # pixels per field of view holding the whole band
     native = fov / sampling
@@ -224,7 +237,8 @@ def _layout(canvas_shape, sampling, fov, reach, rotation):
     turned = fov * (np.abs(rot[0, :]) / sampling[0] + np.abs(rot[1, :]) / sampling[1])
     per_fov = np.maximum(np.ceil(native - 1e-6), np.minimum(np.ceil(turned - 1e-6), band))
     if not lattice:
-        per_fov = np.maximum(per_fov, band)
+        per_fov = np.maximum(per_fov, band) if margin is None else np.minimum(
+            [smooth_fft_size(int(v)) for v in per_fov + int(margin)], band)
     return dict(placement="lattice" if lattice else "patch", multiples=multiples,
                 per_fov=per_fov.astype(int), rotation=rot, corners=corners, span=span)
 
@@ -495,13 +509,16 @@ class ObfSetup:
 
     @classmethod
     def build(cls, geometry, device=None, dtype: torch.dtype | None = None,
-              fft_sizes: bool = False, subpixel_center: bool = True) -> "ObfSetup":
+              fft_sizes: bool = False, subpixel_center: bool = True,
+              margin: int | None = BAND_MARGIN) -> "ObfSetup":
         """Everything OBF needs for `geometry` (a `ParallaxGeometry`), on `device`, in `dtype`
         (float32 by default; float64 for checks off MPS). Takes seconds (the Gram): build it off
         the ingest thread. `subpixel_center` evaluates the probe at each bright-field pixel's true
         k, from the unrounded disk centre (`center_fraction`); off, the probe sits on the rounded
         centre as parallax's shifts do. On the Gd2O3 recordings (0.14 and 0.41 px off a pixel) it
-        takes the interior correlation with quantem's own OBF from 0.988 to 0.999."""
+        takes the interior correlation with quantem's own OBF from 0.988 to 0.999. `margin`: a
+        patch holds only the output grid's band and this many pixels per field of view beyond it
+        (`BAND_MARGIN`); None, OBF's whole band, as quantem does."""
         import time
         t0 = time.perf_counter()
         device = torch.device(device) if device is not None else torch.device("cpu")
@@ -540,7 +557,7 @@ class ObfSetup:
         iy, ix = np.divmod(np.arange(ny * nx), nx)
         positions_A = np.stack((iy * scan_sampling[0], ix * scan_sampling[1]), -1)
         canvas_shape = tuple(int(n) for n in geometry.upsampled_scan_gpts)
-        layout = _layout(canvas_shape, sampling, fov, reach, rotation)
+        layout = _layout(canvas_shape, sampling, fov, reach, rotation, margin)
         if fft_sizes:
             layout["per_fov"] = np.asarray([smooth_fft_size(int(v)) for v in layout["per_fov"]])
             if layout["placement"] == "patch":

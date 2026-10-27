@@ -6,10 +6,10 @@ inputs against its correlation route and against its own OBF of the data (quante
 
 Identical inputs: the bright-field pixels of run.py's geometry (the calibration with C10 refined, on
 the column-flipped frames of export_for_quantem.py), each divided by its scan mean, go to
-DirectPtychographyMontage.from_virtual_bfs, and the port's probe sits on the rounded disk centre,
-so the two differ only in the port. Against quantem's own OBF (recon/quantem/) the port runs as it
+DirectPtychographyMontage.from_virtual_bfs, and the port's probe sits on the rounded disk centre
+and its patches hold OBF's whole band, so the two differ only in the port. Against quantem's own OBF (recon/quantem/) the port runs as it
 does live, with the probe on the measured sub-pixel centre (quantem resamples the frames onto it
-instead); the bright-field masks still differ at the edge, and the FFT route wraps the canvas where
+instead) and its patches holding only the output grid's band; the bright-field masks still differ at the edge, and the FFT route wraps the canvas where
 the correlation route does not, so there only the interior (an eighth of the field in from each
 edge) counts. The live image is saved."""
 import json
@@ -71,7 +71,9 @@ dev_store = torch.from_numpy(store.view(np.int16)).to(device)
 images = {}
 for subpixel in (False, True):
     sync(); t = time.perf_counter()
-    setup = ObfSetup.build(geo, device=device, subpixel_center=subpixel)
+    # identical inputs: quantem's whole band; live: the output grid's band (the default)
+    setup = ObfSetup.build(geo, device=device, subpixel_center=subpixel,
+                           **({} if subpixel else {"margin": None}))
     sync(); t_setup = time.perf_counter() - t
     t = time.perf_counter()
     images[subpixel] = reconstruct_once(dev_store, held, "u16", geo,
