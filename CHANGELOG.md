@@ -13,22 +13,27 @@ viewer's channel list, or start it with `run.py --compute-obf`. It adds the chan
 - The method is the correlation route of quantem's `DirectPtychographyMontage`, ported to torch in
   `processing/obf/`. On the Gd₂O₃ recordings it matches quantem to 2e-6 on identical inputs, and
   quantem's own OBF of the data to a correlation of 0.999 away from the edges.
-- A background thread follows the frames the `latest` store holds, so the ingest never waits for
-  it. It keeps up when it is faster than the frames and lags behind otherwise, showing each
-  position's newest frame. On a retune it rebuilds the Gram in the background and OBF wipes in
-  again over the parallax stand-in at the new geometry.
-- OBF is reconstructed only while it is shown. Choosing it shows the phase-flipped parallax image
-  at once, scaled to OBF's contrast, and OBF wipes in from the scan line: new frames as they
-  arrive, and the frames held swept back from it with the time left. Its weights (the Gram) take
-  seconds per geometry; the checkbox "OBF weights" (`--precompute-obf-weights`) builds them in the
-  background and again after every retune.
-  `--obf-chunk` sets how many positions the thread copies per hold of the accumulator's lock.
-- The viewer's channel list now holds the phase-flipped parallax image too, in place of the
-  phase-flip filter, and channels an algorithm computes on demand (`Algorithm.live_channels`). Its
-  Reconstruction section shows the switches an algorithm declares (`Algorithm.live_switches`).
-  Small dots show the state of OBF and of its weights, with the details on hover.
-- `scripts/bench_obf.py` times it. On an Apple M4 Pro the binned 256² recording takes 105 µs per
-  frame (a 7 s sweep) and a 2.5 s Gram, and a replay at a 200 µs dwell keeps its rate with OBF on.
+- Its patches hold only the band the output grid can show, not OBF's whole band: 3.8× faster per
+  frame at ×2 and 0.3% from the whole band. On an A40 binned OBF runs at 131 kHz (7.7 µs per
+  frame) and unbinned at 32 kHz, above the detector's rates; on an M4 Pro at 37 and 8.7 kHz.
+  `scripts/bench_obf.py` times it (`--full-band` for quantem's choice).
+- OBF is reconstructed only while it is shown, by a background thread that follows the frames the
+  `latest` store holds, so the ingest never waits for it. Choosing it shows the phase-flipped
+  parallax image at once, scaled to OBF's contrast, and OBF wipes in from the scan line: new
+  frames as they arrive, and the frames held swept back from it with the time left (about 2 s for
+  a 256² scan on an A40). It keeps up when it is faster than the frames and lags behind otherwise,
+  showing each position's newest frame.
+- Its weights (the Gram) take a second or a few per geometry. The checkbox "OBF weights"
+  (`--precompute-obf-weights`) builds them in the background and again after every retune; a
+  retune also restarts the wipe. `--obf-chunk` sets how many positions the thread copies per hold
+  of the accumulator's lock.
+- The viewer's channel list holds parallax, phase-flipped parallax (the default, in place of the
+  phase-flip filter) and the channels an algorithm computes on demand (`Algorithm.live_channels`).
+  Its Reconstruction section shows the switches an algorithm declares (`Algorithm.live_switches`),
+  with small dots for the state of OBF and of its weights (details on hover).
+- Viewer: manual contrast limits belong to the channel they were set on; the Fourier transform's
+  colour range comes from the spectrum before the display filters, so a cutoff looks as sharp as it
+  is; the Butterworth order menu reaches 32 (12 by default).
 
 ## 2.2.0
 

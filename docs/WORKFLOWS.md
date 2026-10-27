@@ -30,7 +30,7 @@ python -m realtime_stem.streaming.web tcp://127.0.0.1:5601
 Or give `run.py` `--viewer-port 8050`: the pipeline serves the page itself, and the page can also
 tune the reconstruction (see [Tune it live](#tune-it-live)).
 
-- **Navigation:** one image, the parallax reconstruction. Wheel to zoom, drag to pan,
+- **Navigation:** one image, the phase-flipped parallax reconstruction by default. Wheel to zoom, drag to pan,
   double-click or `f` to fit, `1` for native pixels.
 - **Channel:** parallax or parallax phase-flipped (and OBF with `--accumulate latest`, see the
   GUIDE's "Live OBF").

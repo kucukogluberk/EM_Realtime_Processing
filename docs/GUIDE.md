@@ -282,7 +282,7 @@ all, which would otherwise need a scan rotation.
 - **Instant contrast.** The browser applies contrast, gamma, the colour map and invert on the GPU
   (WebGL2), so the sliders don't round-trip.
 - **Controls:**
-  - **The image:** one reconstruction panel, the parallax image by default. Wheel to zoom, drag
+  - **The image:** one reconstruction panel, the phase-flipped parallax image by default. Wheel to zoom, drag
     to pan, double-click or `f` to fit, `1` for native pixels. A scale bar comes from the
     snapshot's `sampling_A`.
   - **Channel:** which reconstruction the panel shows: parallax, parallax phase-flipped
@@ -292,7 +292,7 @@ all, which would otherwise need a scan rotation.
     and low-pass (display only), set by their cutoff period d_c in Å: the high-pass removes
     spacings coarser than d_c, the low-pass those finer: H = 1/(1 + (q/q_c)^2n) and its
     complement, ½ at q_c = 1/d_c, the filters of quantem and of the pipeline's own `--lowpass` /
-    `--highpass`. Order 12 by default, 2–16 in the "order" menu. The sliders are logarithmic,
+    `--highpass`. Order 12 by default, 2–32 in the "order" menu. The sliders are logarithmic,
     the high-pass from 2 Å up to the field of view, the low-pass from 0.3 to 50 Å. The Fourier
     transform marks each cutoff with a circle.
   - **The Fourier transform panel** (optional) shows the visible square at native pixels, up to
@@ -300,7 +300,9 @@ all, which would otherwise need a scan rotation.
     - The server computes it, as a real FFT in float32: about 35 ms at 2048² on an M4 Pro.
     - The page asks for it once the view has stopped moving.
     - The page applies the filters itself (log P + 2 log₁₀|H(q)|), so moving a slider redraws it
-      at once.
+      at once. Its colour range comes from the spectrum before the filters, so what a filter
+      removes falls to black at the cutoff. Taken from the filtered spectrum, it would reach into
+      the filter's own tail (most of the panel, past a low-pass) and make any cutoff look soft.
     - It shows q and the d-spacing under the cursor, and has a scale bar in Å⁻¹.
     - A dashed outline on the image marks the square it transforms.
     - The phase flip changes only signs, so the phase-flipped channel has the parallax image's
@@ -311,6 +313,9 @@ all, which would otherwise need a scan rotation.
       histogram. Otherwise the blank part and the edge of the scan would dominate both.
   - **Contrast:** limits from the whole frame's histogram, the visible view, or manual.
     - Manual starts from the limits shown; dragging a line on the histogram switches to manual.
+    - Manual limits belong to the channel they were set on, since the channels' values differ by
+      orders of magnitude (parallax sums counts, OBF is in radians). Another channel starts from
+      the whole frame.
     - Gamma, colour map and invert.
   - **Status:** the pass / progress line, pause (space), and a history slider over the kept
     snapshots (`--history-mb`, 512 MB by default).
@@ -430,13 +435,13 @@ OBF needs weights, its Gram, which take seconds to build for each geometry. The 
 weights" next to the accumulate mode (`--precompute-obf-weights`) builds them in the background,
 and again after every change of C10, C12 or the rotation.
 
-Each frame also needs its own OBF work (about 100 µs on an M4 Pro), so the frames held take seconds
-to process. Choosing OBF therefore shows an image at once and lets OBF wipe in, as a scan would.
-The channel starts as the phase-flipped parallax image of the same frames, scaled to OBF's
-contrast, and OBF replaces it row by row from the scan line outwards. New frames are added as they
-arrive, and the worker sweeps back through the frames held, newest first, with the time it has
-left. On the Mac, choosing OBF partway into a pass of the binned Gd₂O₃ walk replayed at 5 kHz
-covered the whole scan in 10.7 s, about 0.8 of a pass. A retune restarts the wipe, with the
+Each frame also needs its own OBF work (8 µs on an A40, 27 µs on an M4 Pro, binned at ×2), so the
+frames held take a moment to process. Choosing OBF therefore shows an image at once and lets OBF
+wipe in, as a scan would. The channel starts as the phase-flipped parallax image of the same
+frames, scaled to OBF's contrast, and OBF replaces it row by row from the scan line outwards. New
+frames are added as they arrive, and the worker sweeps back through the frames held, newest first,
+with the time it has left. On an A40 at ×4, with the binned Gd₂O₃ walk replayed at 15–25 kHz, the
+whole 256² scan was covered about 2 s after choosing OBF. A retune restarts the wipe, with the
 parallax stand-in at the new geometry. A dot next to the checkbox is green when the weights are
 ready, and a dot next to the channel list shows OBF's state (grey while it fills in, green once it
 covers every frame held). Hovering over either gives the details. The intended workflow is to focus
@@ -451,7 +456,11 @@ frame with the probe). Each frame is synthesized as a patch of two probe fields 
 position and added onto a canvas aligned with the detector, and one canvas FFT at readout gives the
 numerator. The Gram depends on the probe, the bright-field pixels, the rotation and the output grid
 but not on the data, so it is built once per geometry. The readout divides by it, transforms back
-and reads the image onto the parallax grid through a cubic spline. The probe is built on the
+and reads the image onto the parallax grid through a cubic spline. Unlike quantem, the patches hold
+only the band the output grid can show (its Nyquist box turned into the detector frame, plus 4
+pixels per probe field of view), not OBF's whole band, 2α/λ. On the binned Gd₂O₃ scan that makes a
+frame 3.8× cheaper at ×2 (2.4× at ×4) and changes the image by 0.3% (0.2% at ×4); `scripts/bench_obf.py
+--full-band` times quantem's choice. The probe is built on the
 parallax geometry (the rotation, the column flip, the disk centre and C10, C12), so OBF and parallax
 agree in orientation by construction, and it is evaluated at each bright-field pixel's true k from
 the unrounded `--center`. Each bright-field pixel is normalized as quantem does, V = I/m − 1, with m
@@ -468,6 +477,10 @@ and the image refreshes at the live cadence. When it is slower, it falls behind 
 position once at its newest frame, and the ingest never waits for it. An output row shows OBF once
 every scan row within the probe's radius (the largest parallax shift) and two more is covered, and
 the snapshot's `complete_rows_obf` gives those rows to the viewer's histogram and Fourier transform.
+The worker reads the store in one short hold of the lock per round and pauses after it (a lock is
+not fair), and while it only follows the scan it collects the new frames at the live cadence. On
+saturn's A40 the Python ingest then takes about 29 kHz with OBF following, against 46 kHz without
+it, both limited by the CPU's decoding; the Holoscan ingest has yet to be measured with OBF.
 The snapshot metadata also carries `obf_state`, `obf_weights_state`, `obf_coverage`, `obf_age_s`,
 `obf_rate_khz` and `obf_sweep_s`.
 
@@ -489,6 +502,15 @@ unbinned at ×2 (`sessions/2026-10-20_Gd2O3/analysis/obf_vs_quantem.py`). Within
 the scan edges the image differs from quantem's FFT route, which wraps the canvas where this does
 not.
 
+OBF looks grainier and flatter than phase-flipped parallax, though it shows the lattice at least as
+well. It whitens the noise up to the band, so its Fourier transform is uniformly bright inside it,
+and it transfers little at low frequencies, so the particles fade. On the binned Gd₂O₃ recording at
+×2 the bixbyite spots stand out of their rings by 32×, 10×, 47× and 12× (222, 400, 440, 622) in
+OBF against 30×, 10×, 18× and 13× in phase-flipped parallax. Only far from focus (the first pass of
+a walk from −500 Å) does OBF fall behind. A low-pass in the viewer at about 1.5 Å suits it. The
+higher-order aberrations the calibration fits (C30, C21, C23) do not improve it here
+(`sessions/2026-10-20_Gd2O3/analysis/obf_aberrations.py`).
+
 On Apple's `mps` only one thread can use the GPU at a time, so the worker holds the accumulator's
 lock for each unit of its GPU work (one deposit sub-batch, about 20 ms binned) and builds the Gram
 on the CPU. A replay at a dwell OBF can keep up with shows how it follows a scan. On an M4 Pro the
@@ -505,8 +527,7 @@ On the GPU machine, time it first with `python scripts/bench_obf.py --device cud
 recording at full rate through the Holoscan ingest, `RECORDING=<file.dstream> SCAN="256 256"
 BINNED=1 FLAGS="$(cat <session>/calibration/binned.flags) --accumulate latest --compute-obf"
 scripts/check_install.sh`, and compare the parallax rate with and without `--compute-obf`. For a
-slower
-dwell, feed the pipeline with `python -m tools.replay_to_zmq <file.dstream> --rate <Hz>`.
+slower dwell, feed the pipeline with `python -m tools.replay_to_zmq <file.dstream> --rate <Hz>`.
 
 Limits: OBF needs `--accumulate latest`, since the other modes keep no frames to read. It uses
 parallax's bright-field pixels, so the soft edge of the aperture beyond the semiangle is left out.
@@ -760,18 +781,22 @@ ingest, not the parallax arithmetic (see "Batch size and rate" and "Scheduler" u
 issues). For the end-to-end rate on a given machine, replay a recording with
 `scripts/check_install.sh`.
 
-`scripts/bench_obf.py` times live OBF on the Gd₂O₃ recordings' geometry (256² scan, ×2).
-It reports the setup, the deposit rate against 1.2 times the detector's, where a batch's time goes
-and one readout. On the same M4 Pro (`mps`):
+`scripts/bench_obf.py` times live OBF on the Gd₂O₃ recordings' geometry (256² scan, ×2 unless
+noted). It reports the setup, the deposit rate against 1.2 times the detector's, where a batch's
+time goes and one readout. With the patches on the output grid's band (the default):
 
-| detector | M | setup (Gram) | deposit | a sweep of the scan | readout |
+| device | detector | setup (Gram) | deposit | a sweep of the scan | readout |
 |---|---|---|---|---|---|
-| binned 96² | 2,477 | 2.5 s (3.3 s on the CPU) | 9.5 kHz (105 µs/frame) | 6.9 s | 55 ms |
-| unbinned 192² | 9,941 | 9.1 s (12.9 s on the CPU) | 2.0 kHz (507 µs/frame) | 33 s | 177 ms |
+| A40 | binned 96² (M 2,477) | 1.2 s | 131 kHz (7.7 µs/frame) | 0.5 s | 1.4 ms |
+| A40 | unbinned 192² (M 9,941) | 2.1 s | 32 kHz (32 µs/frame) | 2.1 s | 1.5 ms |
+| A40, ×4 | binned / unbinned | 3.4 / 5.8 s | 68 / 20 kHz | 1.0 / 3.4 s | 5 ms |
+| M4 Pro (`mps`) | binned | 0.9 s | 37 kHz (27 µs/frame) | 1.8 s | 3.5 ms |
+| M4 Pro (`mps`) | unbinned | 3.3 s | 8.7 kHz (115 µs/frame) | 7.6 s | 5.7 ms |
 
-A binned frame's time goes about half to the detector-side correlations, a third to the patch
-synthesis and the rest to the deposit. The rate does not depend on the batch size or the
-upsampling. The CUDA numbers are still to be measured.
+With OBF's whole band (`--full-band`, quantem's choice) the A40 takes 31 µs per binned frame and
+130 µs per unbinned one, and the M4 Pro 105 and 507 µs. The detector-side correlations are now 85–90%
+of a frame's time. The rate does not depend on the batch size. At ×2 binned OBF keeps up with the
+detector's 120 kHz on an A40, and unbinned with its 20 kHz.
 
 ## Known issues and limitations
 
