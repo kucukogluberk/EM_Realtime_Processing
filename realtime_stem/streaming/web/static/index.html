@@ -91,7 +91,7 @@ body.recording #rec { border-color: var(--bad); color: var(--bad); }
 
   <details id="sec-filters" open><summary title="The Fourier transform shows the filters too.">Filters</summary>
     <div class="row"><label for="order" title="Butterworth order of the high- and low-pass: higher is sharper">order</label>
-      <select id="order" title="Butterworth order of the high- and low-pass: higher is sharper"><option>2</option><option>4</option><option>8</option><option selected>12</option><option>16</option></select></div>
+      <select id="order" title="Butterworth order of the high- and low-pass: higher is sharper"><option>2</option><option>4</option><option>8</option><option selected>12</option><option>16</option><option>24</option><option>32</option></select></div>
     <div class="row" title="removes spacings coarser than this; logarithmic, from 2 Å to the field of view"><label>high-pass</label><input type="range" id="hp" min="0" max="100" step="1" value="0"><output id="hp_o"></output></div>
     <div class="row" title="removes spacings finer than this; logarithmic, from 0.3 Å to 50 Å"><label>low-pass</label><input type="range" id="lp" min="0" max="100" step="1" value="0"><output id="lp_o"></output></div>
   </details>
@@ -139,6 +139,7 @@ const S = {
   latest: null, shown: null, paused: false, base: null, fft: false, cam: null,
   cmode: "frame", pLo: 0.5, pHi: 99.5, mLo: 0, mHi: 1, gamma: 1, cmap: "gray", invert: false,
   hpA: 0, lpA: 0, order: 12, arrivals: [],
+  contrastBy: {},                                 // manual limits per channel (their scales differ)
 };
 let IMG = null, FFT = null;                       // the reconstruction panel and the Fourier transform's
 
@@ -182,13 +183,27 @@ function lutBytes(name) {
 function sampling() { const s = S.shown && S.shown.meta && S.shown.meta.sampling_A; return s ? s[1] : null; }
 function chan() {                    // the channel shown: the one chosen, once the stream carries it
   const names = S.shown ? S.shown.names : [];
-  return !S.shown || names.includes(S.base) ? S.base : names.includes("parallax") ? "parallax" : names[0];
+  return !S.shown || names.includes(S.base) ? S.base : defaultChannel(names);
 }
 // channels computed only while shown (the live control's, e.g. OBF): {name: {label, active, available}}
 function onDemand() { return Object.fromEntries(((T.state && T.state.channels) || []).map((c) => [c.name, c])); }
 const CHANNEL_LABELS = {parallax: "parallax", phase_flipped: "parallax, phase-flipped", obf: "OBF",
                         coverage: "coverage"};
 function chanLabel(n) { const c = onDemand()[n]; return c ? c.label : CHANNEL_LABELS[n] || n; }
+// the channel shown when none is chosen: the phase-flipped parallax image, where there is one
+// show channel `name`: manual contrast limits belong to the channel they were set on, since the
+// channels' values differ by orders of magnitude (parallax sums counts, OBF is in radians)
+function useChannel(name) {
+  if (name === S.base) return;
+  if (S.base) S.contrastBy[S.base] = S.cmode === "manual" ? [S.mLo, S.mHi] : null;
+  const saved = S.contrastBy[name];
+  if (saved) { [S.mLo, S.mHi] = saved; S.cmode = "manual"; } else if (S.cmode === "manual") S.cmode = "frame";
+  $("cmode").value = S.cmode;
+  S.base = name;
+}
+function defaultChannel(names) {
+  return names.includes("phase_flipped") ? "phase_flipped" : names.includes("parallax") ? "parallax" : names[0];
+}
 function filtered() { return S.hpA > 0 || S.lpA > 0; }
 // The high- and low-pass are the Butterworth filters of quantem and of the pipeline's readout,
 // order n (S.order), cutoff periods d_c (S.hpA, S.lpA, in Å), q_c = 1/d_c:
@@ -296,7 +311,7 @@ class Panel {
     return [histPct(st.stats[k], S.pLo), histPct(st.stats[k], S.pHi)];
   }
   limits() {
-    if (this.kind === "fft") return this.t ? sortedPct(this.t.sorted, 30, 99.95) : [0, 1];
+    if (this.kind === "fft") return this.t ? sortedPct(this.t.rawSorted, 30, 99.95) : [0, 1];
     return S.cmode === "manual" ? [S.mLo, S.mHi] : this.autoLimits(S.cmode);
   }
   draw() {
@@ -353,6 +368,12 @@ class Panel {
     for (let i = 0; i < u16.length; i++) raw[i] = HALF[u16[i]] * hdr.scale + hdr.off;
     this.t = {key, seq: hdr.seq, region: hdr.region, f: 1, shape: hdr.shape, off: 0, scale: 1, raw,
               n: hdr.n, bin: hdr.bin, source: hdr.source};
+    // the colour range comes from the spectrum before the display filters, so that what a filter
+    // removes falls to black: from the filtered one, the darkest colour would sit in the filter's own
+    // tail (most of the panel, past a low-pass) and the roll-off would span the colour scale
+    const step = Math.max(1, Math.floor(raw.length / 65536)), sample = [];
+    for (let i = 0; i < raw.length; i += step) sample.push(raw[i]);
+    this.t.rawSorted = sample.sort((a, b) => a - b);
     this.filterSpectrum();
   }
   filterSpectrum() {                    // log10 (P·|H|²) = log10 P + 2 log10 |H(q)|, H the display filters
@@ -568,7 +589,7 @@ function show(st) {
   S.shown = st;
   const extra = Object.values(onDemand()).filter((c) => c.available && !st.names.includes(c.name));
   const bases = [...st.names, ...extra.map((c) => c.name)];
-  if (!S.base || !bases.includes(S.base)) S.base = bases.includes("parallax") ? "parallax" : bases[0];
+  if (!S.base || !bases.includes(S.base)) useChannel(defaultChannel(bases));
   buildImageUI(st, bases);
   layout();
   if (first || reshaped || !S.cam) requestAnimationFrame(() => {
@@ -942,7 +963,7 @@ function refreshTune() {                          // show the values the pipelin
   if (st.modes.length) $("mode").value = st.mode;
   const demand = onDemand();                      // a channel switched off (reset, a mode) is not shown
   if (demand[S.base] && !(demand[S.base].active && demand[S.base].available)) {
-    S.base = "parallax"; if (S.shown) show(S.shown);
+    useChannel(defaultChannel(S.shown ? S.shown.names : [])); if (S.shown) show(S.shown);
   }
   for (const s of st.switches || []) {
     const el = $("switches").querySelector(`input[data-switch="${s.name}"]`); if (!el) continue;
@@ -989,7 +1010,7 @@ function bind() {
   on("fit", "click", () => { fitAll(); redraw(); schedule(); });
   on("one", "click", () => { oneToOne(); redraw(); schedule(); });
   on("base", "change", (e) => {
-    const was = S.base, demand = onDemand(); S.base = e.target.value;
+    const was = S.base, demand = onDemand(); useChannel(e.target.value);
     const ask = {};                               // an on-demand channel is computed while it is shown
     if (demand[was] && was !== S.base) ask[was] = false;
     if (demand[S.base] && !demand[S.base].active) ask[S.base] = true;
