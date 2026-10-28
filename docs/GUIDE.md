@@ -456,11 +456,11 @@ frame with the probe). Each frame is synthesized as a patch of two probe fields 
 position and added onto a canvas aligned with the detector, and one canvas FFT at readout gives the
 numerator. The Gram depends on the probe, the bright-field pixels, the rotation and the output grid
 but not on the data, so it is built once per geometry. The readout divides by it, transforms back
-and reads the image onto the parallax grid through a cubic spline. Unlike quantem, the patches hold
-only the band the output grid can show (its Nyquist box turned into the detector frame, plus 4
-pixels per probe field of view), not OBF's whole band, 2α/λ. On the binned Gd₂O₃ scan that makes a
-frame 3.8× cheaper at ×2 (2.4× at ×4) and changes the image by 0.3% (0.2% at ×4); `scripts/bench_obf.py
---full-band` times quantem's choice. The probe is built on the
+and reads the image onto the parallax grid through a cubic spline. The patches hold only the band
+the output grid can show (its Nyquist box turned into the detector frame, plus 4 pixels per probe
+field of view), not OBF's whole band, 2α/λ, as quantem's `patch_margin` does by default. On the
+binned Gd₂O₃ scan that makes a frame 3.8× cheaper at ×2 (2.4× at ×4) and changes the image by 0.3%
+(0.2% at ×4); `scripts/bench_obf.py --full-band` times the whole band. The probe is built on the
 parallax geometry (the rotation, the column flip, the disk centre and C10, C12), so OBF and parallax
 agree in orientation by construction, and it is evaluated at each bright-field pixel's true k from
 the unrounded `--center`. Each bright-field pixel is normalized as quantem does, V = I/m − 1, with m
@@ -793,7 +793,7 @@ time goes and one readout. With the patches on the output grid's band (the defau
 | M4 Pro (`mps`) | binned | 0.9 s | 37 kHz (27 µs/frame) | 1.8 s | 3.5 ms |
 | M4 Pro (`mps`) | unbinned | 3.3 s | 8.7 kHz (115 µs/frame) | 7.6 s | 5.7 ms |
 
-With OBF's whole band (`--full-band`, quantem's choice) the A40 takes 31 µs per binned frame and
+With OBF's whole band (`--full-band`, quantem's `patch_margin=None`) the A40 takes 31 µs per binned frame and
 130 µs per unbinned one, and the M4 Pro 105 and 507 µs. The detector-side correlations are now 85–90%
 of a frame's time. The rate does not depend on the batch size. At ×2 binned OBF keeps up with the
 detector's 120 kHz on an A40, and unbinned with its 20 kHz.

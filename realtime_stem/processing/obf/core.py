@@ -19,6 +19,12 @@ the scan, which is what makes OBF streamable.
   fields of view about its position, shifted by its sub-pixel part in Fourier space and added with
   `index_add_`. One canvas FFT at readout gives the numerator. The window misses the aperture's
   diffraction tails, about 1% of the numerator.
+- A patch holds only the band the output grid can show (its Nyquist box turned into the detector
+  frame, plus `BAND_MARGIN` pixels per field of view), not OBF's whole band, unless
+  `margin=None` (quantem's `patch_margin`, the same rule). The patches, the detector-side
+  correlations, the canvas and the Gram shrink with it. On the binned Gd2O3 scan at x2 that is
+  3.8x faster per frame and 0.3% from the whole band. Each patch's spectrum is then cut at its
+  edge, which is all the difference.
 - The Gram Σ_k |c_k(q)|² does not depend on the data. Its direct terms are FFT autocorrelations;
   its cross term has no FFT form and is a per-pixel pass inside the probe's support radius. It is
   built once per geometry (`ObfSetup.build`), off the ingest thread.
@@ -43,11 +49,6 @@ positions held (`normalize`). The departures from quantem are deliberate and sma
   CPU); with one column it is exact either way;
 - `fft_sizes=True` rounds the canvas's pixels per field of view up to a size the FFTs handle
   quickly (a finer canvas, the same band).
-- a patch holds only the band the output grid can show (its Nyquist box turned into the detector
-  frame, plus `BAND_MARGIN` pixels per field of view), not OBF's whole band, unless
-  `margin=None`. The patches, the detector-side correlations, the canvas and the Gram shrink with
-  it: on the binned Gd2O3 scan at x2, 3.8x faster per frame and 0.3% from the whole band. Each
-  patch's spectrum is then cut at its edge, which is all the difference.
 """
 
 from __future__ import annotations
@@ -217,9 +218,10 @@ def _layout(canvas_shape, sampling, fov, reach, rotation, margin=None):
     the requested canvas turned into the detector frame, with room per side for half a field of
     view (lattice) or half a patch, so nothing wraps onto it. `_finish_layout` adds the rest.
 
-    A patch holds OBF's whole band (quantem's choice) unless `margin` is given: then only the
-    requested canvas's Nyquist box turned into the detector frame, and `margin` pixels per field
-    of view beyond it, so the patches and the detector-side correlations shrink."""
+    A patch holds OBF's whole band if `margin` is None. Otherwise it holds only the requested
+    canvas's Nyquist box turned into the detector frame and `margin` pixels per field of view
+    beyond it, so the patches and the detector-side correlations shrink, but never fewer pixels
+    than the requested canvas has (quantem's `patch_margin`)."""
     sampling = np.asarray(sampling, dtype=np.float64)
     band = 4 * reach + 1                      # pixels per field of view holding the whole band
     native = fov / sampling
@@ -237,8 +239,8 @@ def _layout(canvas_shape, sampling, fov, reach, rotation, margin=None):
     turned = fov * (np.abs(rot[0, :]) / sampling[0] + np.abs(rot[1, :]) / sampling[1])
     per_fov = np.maximum(np.ceil(native - 1e-6), np.minimum(np.ceil(turned - 1e-6), band))
     if not lattice:
-        per_fov = np.maximum(per_fov, band) if margin is None else np.minimum(
-            [smooth_fft_size(int(v)) for v in per_fov + int(margin)], band)
+        per_fov = np.maximum(per_fov, band if margin is None else np.minimum(
+            [smooth_fft_size(int(v)) for v in per_fov + int(margin)], band))
     return dict(placement="lattice" if lattice else "patch", multiples=multiples,
                 per_fov=per_fov.astype(int), rotation=rot, corners=corners, span=span)
 
@@ -518,7 +520,7 @@ class ObfSetup:
         centre as parallax's shifts do. On the Gd2O3 recordings (0.14 and 0.41 px off a pixel) it
         takes the interior correlation with quantem's own OBF from 0.988 to 0.999. `margin`: a
         patch holds only the output grid's band and this many pixels per field of view beyond it
-        (`BAND_MARGIN`); None, OBF's whole band, as quantem does."""
+        (`BAND_MARGIN`); None, OBF's whole band (quantem's `patch_margin=None`)."""
         import time
         t0 = time.perf_counter()
         device = torch.device(device) if device is not None else torch.device("cpu")

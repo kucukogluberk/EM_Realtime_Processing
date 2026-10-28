@@ -156,8 +156,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fft-sizes", action="store_true",
                    help="Round the canvas's pixels per field of view up to 2^a 3^b 5^c sizes.")
     p.add_argument("--full-band", action="store_true",
-                   help="Patches holding OBF's whole band, as quantem does, instead of the output "
-                        "grid's band (the default, 2-4x faster per frame).")
+                   help="Patches holding OBF's whole band (quantem's patch_margin=None) instead "
+                        "of the output grid's band (the default, 2-4x faster per frame).")
     return p
 
 

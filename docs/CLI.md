@@ -571,7 +571,7 @@ usage: python scripts/bench_obf.py [-h] [--device DEVICE [DEVICE ...]]
 | `--batch BATCH [BATCH ...]` | `512 1024 2048` | Frames per deposit call. |
 | `--repeats REPEATS` | `10` | Timed batches per measurement. |
 | `--fft-sizes` | flag | Round the canvas's pixels per field of view up to 2^a 3^b 5^c sizes. |
-| `--full-band` | flag | Patches holding OBF's whole band, as quantem does, instead of the output grid's band (the default, 2-4x faster per frame). |
+| `--full-band` | flag | Patches holding OBF's whole band (quantem's patch_margin=None) instead of the output grid's band (the default, 2-4x faster per frame). |
 
 ## `python scripts/compare_accumulate.py`
 
