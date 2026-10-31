@@ -25,6 +25,7 @@ changed recently, [CHANGELOG.md](../CHANGELOG.md).
 | [`python examples/probe.py`](#python-examplesprobepy) | headless live-stream probe |
 | [`python examples/plot_result.py`](#python-examplesplot_resultpy) | plot a saved result |
 | [`python scripts/bench_accumulator.py`](#python-scriptsbench_accumulatorpy) | benchmark the accumulator |
+| [`python scripts/bench_obf.py`](#python-scriptsbench_obfpy) | benchmark live OBF |
 | [`python scripts/compare_accumulate.py`](#python-scriptscompare_accumulatepy) | compare the continuous modes |
 | [`python scripts/session_report.py`](#python-scriptssession_reportpy) | the standard analysis of a session of recordings |
 | [demo scripts](#demo-scripts) | `run_local_demo.sh`, `run_replay_demo.sh` |
@@ -58,6 +59,7 @@ usage: python -m realtime_stem.apps.run [-h] [--algorithm {parallax}]
                                         [--no-dc-correct] [--normalize] [--coverage] [--lowpass Q]
                                         [--highpass Q] [--butterworth-order N]
                                         [--suppress-nyquist {auto,on,off}] [--band-limit]
+                                        [--precompute-obf-weights] [--compute-obf] [--obf-chunk N]
 ```
 
 **general**
@@ -146,6 +148,14 @@ usage: python -m realtime_stem.apps.run [-h] [--algorithm {parallax}]
 | `--butterworth-order N` | `12` | Steepness of the Butterworth low/high-pass edges. |
 | `--suppress-nyquist {auto,on,off}` | `auto` | Zero the Nyquist row/column of the output (auto: on when --upsampling > 1). |
 | `--band-limit` | flag | Clamp the low-pass at the parallax band limit 2*alpha/lambda. |
+
+**optimum bright field (OBF direct ptychography, beside parallax; --accumulate latest)**
+
+| parameter | default | description |
+|---|---|---|
+| `--precompute-obf-weights` | flag | Build OBF's weights (its Gram: they depend on the probe, the bright-field pixels, the rotation and the output grid, not on the data) in the background at start-up and again after every retune, so that choosing OBF in the viewer's channel list needs only a sweep of the frames held. The viewer's 'precompute OBF weights' checkbox. |
+| `--compute-obf` | flag | Reconstruct OBF from the start, as choosing it in the viewer's channel list does: the live channel `obf` and parallax_obf.npy, on the parallax output grid, for a run without a viewer. A background thread follows the frames the store holds, so the ingest never waits for it; slower than the frames, it lags and shows each position's newest frame. |
+| `--obf-chunk N` | `2048` | Scan positions the OBF thread copies from the store per hold of the accumulator's lock (on Apple's mps, at most one deposit sub-batch). |
 
 ## `python -m tools.simulate_4dstem`
 
@@ -538,6 +548,31 @@ usage: python scripts/bench_accumulator.py [-h] [--device DEVICE [DEVICE ...]] [
 | `--repeats REPEATS` | `50` | Timed batches per measurement. |
 | `--accumulate {all,latest,reset,swap} [{all,latest,reset,swap} ...]` | `all latest` | Accumulation modes to time (run.py --accumulate). |
 
+## `python scripts/bench_obf.py`
+
+Time live OBF on the Gd2O3 session's geometry: the setup (the Gram), the deposit rate against the detector's, where a batch's time goes, and one readout.
+
+```text
+usage: python scripts/bench_obf.py [-h] [--device DEVICE [DEVICE ...]]
+                                   [--preset {binned,unbinned} [{binned,unbinned} ...]]
+                                   [--scan NY NX] [--upsampling UPSAMPLING]
+                                   [--batch BATCH [BATCH ...]] [--repeats REPEATS] [--fft-sizes]
+                                   [--full-band]
+```
+
+**general**
+
+| parameter | default | description |
+|---|---|---|
+| `--device DEVICE [DEVICE ...]` |  | Devices to time (default: cuda or mps where available, else cpu). |
+| `--preset {binned,unbinned} [{binned,unbinned} ...]` | `binned unbinned` | Detector modes of the Gd2O3 recordings to time. |
+| `--scan NY NX` | `256 256` | Scan grid (sets the canvas, and so the Gram and the readout). |
+| `--upsampling UPSAMPLING` | `2` | Output-grid upsampling. |
+| `--batch BATCH [BATCH ...]` | `512 1024 2048` | Frames per deposit call. |
+| `--repeats REPEATS` | `10` | Timed batches per measurement. |
+| `--fft-sizes` | flag | Round the canvas's pixels per field of view up to 2^a 3^b 5^c sizes. |
+| `--full-band` | flag | Patches holding OBF's whole band (quantem's patch_margin=None) instead of the output grid's band (the default, 2-4x faster per frame). |
+
 ## `python scripts/compare_accumulate.py`
 
 Compare the continuous modes on a looped capture: each mode's live image part-way through each pass against the true pass images.
@@ -558,6 +593,8 @@ usage: python scripts/compare_accumulate.py [-h]
                                             [--coverage] [--lowpass Q] [--highpass Q]
                                             [--butterworth-order N]
                                             [--suppress-nyquist {auto,on,off}] [--band-limit]
+                                            [--precompute-obf-weights] [--compute-obf]
+                                            [--obf-chunk N]
                                             source
 ```
 
@@ -617,6 +654,14 @@ usage: python scripts/compare_accumulate.py [-h]
 | `--butterworth-order N` | `12` | Steepness of the Butterworth low/high-pass edges. |
 | `--suppress-nyquist {auto,on,off}` | `auto` | Zero the Nyquist row/column of the output (auto: on when --upsampling > 1). |
 | `--band-limit` | flag | Clamp the low-pass at the parallax band limit 2*alpha/lambda. |
+
+**optimum bright field (OBF direct ptychography, beside parallax; --accumulate latest)**
+
+| parameter | default | description |
+|---|---|---|
+| `--precompute-obf-weights` | flag | Build OBF's weights (its Gram: they depend on the probe, the bright-field pixels, the rotation and the output grid, not on the data) in the background at start-up and again after every retune, so that choosing OBF in the viewer's channel list needs only a sweep of the frames held. The viewer's 'precompute OBF weights' checkbox. |
+| `--compute-obf` | flag | Reconstruct OBF from the start, as choosing it in the viewer's channel list does: the live channel `obf` and parallax_obf.npy, on the parallax output grid, for a run without a viewer. A background thread follows the frames the store holds, so the ingest never waits for it; slower than the frames, it lags and shows each position's newest frame. |
+| `--obf-chunk N` | `2048` | Scan positions the OBF thread copies from the store per hold of the accumulator's lock (on Apple's mps, at most one deposit sub-batch). |
 
 ## `python scripts/session_report.py`
 

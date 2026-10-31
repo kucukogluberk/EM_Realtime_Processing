@@ -30,9 +30,11 @@ python -m realtime_stem.streaming.web tcp://127.0.0.1:5601
 Or give `run.py` `--viewer-port 8050`: the pipeline serves the page itself, and the page can also
 tune the reconstruction (see [Tune it live](#tune-it-live)).
 
-- **Navigation:** one image, the parallax reconstruction. Wheel to zoom, drag to pan,
+- **Navigation:** one image, the phase-flipped parallax reconstruction by default. Wheel to zoom, drag to pan,
   double-click or `f` to fit, `1` for native pixels.
-- **Filters:** the phase flip, and Butterworth high- and low-pass set by their cutoff period in
+- **Channel:** parallax or parallax phase-flipped (and OBF with `--accumulate latest`, see the
+  GUIDE's "Live OBF").
+- **Filters:** Butterworth high- and low-pass set by their cutoff period in
   Å (logarithmic sliders; the high-pass reaches the field of view), order 12 by default. The
   Fourier transform shows them too, at once, with a circle at each cutoff.
 - **Fourier transform** (optional panel) of the visible square, with q and the d-spacing under
@@ -51,7 +53,7 @@ tune the reconstruction (see [Tune it live](#tune-it-live)).
   - **page** (the default) records the whole page with its controls; the browser asks to share
     the tab.
   - **view** records the image and Fourier transform as the PNG shows them.
-- **URL presets:** e.g. `?flip=1&fft=1&lp=1.5` for the phase-flipped image with its Fourier
+- **URL presets:** e.g. `?ch=phase_flipped&fft=1&lp=1.5` (or `?flip=1`) for the phase-flipped image with its Fourier
   transform, or `?cmap=inferno&view=1to1`. `?snapshot` shows one snapshot without the live
   stream.
 - **Another computer:** run the viewer next to the pipeline and `ssh -L 8050:127.0.0.1:8050

@@ -51,13 +51,38 @@ class ParallaxAlgorithm(Algorithm):
                  "(mass-thickness, diffraction) over regions larger than about the probe, and the "
                  "frame-to-frame changes in beam intensity. Default: off, the mean is kept.")
         add_readout_args(parser)  # --no-phase-flip/--no-dc-correct/--normalize/filters
+        o = parser.add_argument_group(
+            "optimum bright field (OBF direct ptychography, beside parallax; --accumulate latest)")
+        o.add_argument(
+            "--precompute-obf-weights", action="store_true",
+            help="Build OBF's weights (its Gram: they depend on the probe, the bright-field "
+                 "pixels, the rotation and the output grid, not on the data) in the background "
+                 "at start-up and again after every retune, so that choosing OBF in the viewer's "
+                 "channel list needs only a sweep of the frames held. The viewer's 'precompute "
+                 "OBF weights' checkbox.")
+        o.add_argument(
+            "--compute-obf", action="store_true",
+            help="Reconstruct OBF from the start, as choosing it in the viewer's channel list "
+                 "does: the live channel `obf` and parallax_obf.npy, on the parallax output "
+                 "grid, for a run without a viewer. A background thread follows the frames the "
+                 "store holds, so the ingest never waits for it; slower than the frames, it lags "
+                 "and shows each position's newest frame.")
+        o.add_argument(
+            "--obf-chunk", type=int, default=2048, metavar="N",
+            help="Scan positions the OBF thread copies from the store per hold of the "
+                 "accumulator's lock (on Apple's mps, at most one deposit sub-batch).")
 
     def preprocess_argv(self, argv: list[str]) -> list[str]:
         # `--defocus -1.5e4` etc.: scientific-notation negatives read as flags otherwise.
         return join_negative_floats(argv)
 
     def check_args(self, args: argparse.Namespace) -> list[str]:
-        return missing_acquisition_args(args)
+        problems = missing_acquisition_args(args)
+        for flag in ("compute_obf", "precompute_obf_weights"):
+            if getattr(args, flag, False) and getattr(args, "accumulate", "scan") != "latest":
+                problems.append(f"--{flag.replace('_', '-')} needs --accumulate latest (OBF "
+                                f"follows the frames its store holds)")
+        return problems
 
     @staticmethod
     def _geometry(args: argparse.Namespace):
@@ -107,12 +132,56 @@ class ParallaxAlgorithm(Algorithm):
             print(f"[parallax] accumulate=latest: keeping the newest frame per scan position "
                   f"(~{acc.store_bytes(itemsize) / 1e6:,.0f} MB on {acc.device}; the Python "
                   f"ingest stores 32-bit)", flush=True)
+            if getattr(args, "compute_obf", False) or \
+                    getattr(args, "precompute_obf_weights", False):
+                self._attach_obf(acc, args, itemsize=itemsize)
         elif mode in ("reset", "swap"):
             avg = getattr(args, "pass_average", 1.0)
             print(f"[parallax] accumulate={mode}: a fresh image per pass, the last completed pass "
                   f"kept" + (f", blended with weight {avg:g}" if mode == "swap" and avg < 1 else "")
                   + f" (~{2 * acc.out.numel() * 4 / 1e6:,.0f} MB on {acc.device})", flush=True)
         return acc
+
+    @staticmethod
+    def _attach_obf(acc, args, itemsize: int = 2):
+        """Start OBF's follower thread beside a `latest` accumulator (`acc.obf`)."""
+        from realtime_stem.processing.obf.follower import ObfFollower   # torch-heavy, on demand
+        on = bool(getattr(args, "compute_obf", False))
+        follower = ObfFollower(acc, enabled=on,
+                               precompute=bool(getattr(args, "precompute_obf_weights", False)),
+                               chunk=getattr(args, "obf_chunk", 2048),
+                               live_every=getattr(args, "live_every", 0.2))
+        print("[parallax] OBF: " + ("reconstructed in the background from the frames the store "
+                                    f"holds (with its own copy of them, "
+                                    f"~{acc.store_bytes(itemsize) / 1e6:,.0f} MB more)" if on
+                                    else "its weights are built in the background"), flush=True)
+        return follower
+
+    def _update_obf(self, acc, args) -> None:
+        """Bring the running accumulator's OBF in line with `args` (the switch and the channel)."""
+        if acc is None or getattr(acc, "accumulate", None) != "latest":
+            return
+        on = bool(getattr(args, "compute_obf", False))
+        weights = bool(getattr(args, "precompute_obf_weights", False))
+        follower = getattr(acc, "obf", None)
+        if follower is None:
+            if on or weights:
+                self._attach_obf(acc, args)
+            return
+        follower.set_precompute(weights)
+        follower.set_enabled(on)
+
+    def live_switches(self, args: argparse.Namespace, acc: Accumulator | None) -> list[dict]:
+        return [{"name": "obf_weights", "label": "OBF weights",
+                 "value": bool(getattr(args, "precompute_obf_weights", False)),
+                 "available": args.accumulate == "latest",
+                 "title": "build OBF's weights (its Gram) in the background, and again after a "
+                          "retune, so that choosing OBF in the channel list needs only a sweep "
+                          "of the frames held (run.py --precompute-obf-weights)"}]
+
+    def live_channels(self, args: argparse.Namespace, acc: Accumulator | None) -> list[dict]:
+        return [{"name": "obf", "label": "OBF", "active": bool(getattr(args, "compute_obf", False)),
+                 "available": args.accumulate == "latest"}]
 
     # ── live tuning: C10, the rotation, and C12 as Cartesian components (like stigmators) ──
 
@@ -138,10 +207,28 @@ class ParallaxAlgorithm(Algorithm):
 
     def retune(self, acc: Accumulator, args: argparse.Namespace, values: dict) -> str:
         """C10 → --defocus, rotation → --rotation, (C12 a, C12 b) = C12 (cos 2φ12, sin 2φ12) →
-        --c12 / --phi12; then re-shift the running accumulator (`set_geometry`)."""
-        unknown = set(values) - {"c10", "rotation", "c12a", "c12b"}
+        --c12 / --phi12; then re-shift the running accumulator (`set_geometry`, which also
+        rebuilds OBF's weights in the background). "obf" starts or stops the OBF reconstruction
+        (the channel), "obf_weights" its weights' precomputation (the switch)."""
+        unknown = set(values) - {"c10", "rotation", "c12a", "c12b", "obf", "obf_weights"}
         if unknown:
             raise ValueError(f"not tunable: {', '.join(sorted(unknown))}")
+        values = dict(values)
+        notes = []
+        obf, weights = values.pop("obf", None), values.pop("obf_weights", None)
+        if (obf or weights) and args.accumulate != "latest":
+            raise ValueError("OBF needs accumulate latest: it follows the frames the store holds")
+        if obf is not None:
+            args.compute_obf = bool(obf)
+        if weights is not None:
+            args.precompute_obf_weights = bool(weights)
+        if values:
+            notes.append(self._retune_geometry(acc, args, values))
+        if obf is not None or weights is not None:
+            self._update_obf(acc, args)
+        return "; ".join(notes)
+
+    def _retune_geometry(self, acc: Accumulator, args: argparse.Namespace, values: dict) -> str:
         if "c10" in values:
             args.defocus = float(values["c10"])
         if "rotation" in values:
@@ -158,16 +245,31 @@ class ParallaxAlgorithm(Algorithm):
         flags = [f"--defocus={float(args.defocus):.1f}", f"--rotation={float(args.rotation):.2f}"]
         if args.c12:
             flags += [f"--c12={float(args.c12):.1f}", f"--phi12={float(args.phi12 or 0.0):.1f}"]
+        if getattr(args, "precompute_obf_weights", False):
+            flags.append("--precompute-obf-weights")
         return flags
 
     # readout channel → saved file (the raw sum keeps its historical name)
     _FILES = {"raw": "parallax_recon.npy", "parallax": "parallax_corrected.npy",
-              "phase_flipped": "parallax_phase_flipped.npy", "coverage": "parallax_coverage.npy"}
+              "phase_flipped": "parallax_phase_flipped.npy", "coverage": "parallax_coverage.npy",
+              "obf": "parallax_obf.npy"}
 
     def save(self, acc: Accumulator, out_dir: Path, tag: str = "") -> None:
         """Save every readout channel; with a `tag` (continuous mode) also a numbered copy of each,
-        so a session keeps all its scans while the plain names always hold the latest one."""
+        so a session keeps all its scans while the plain names always hold the latest one.
+
+        OBF: without a tag (the run's end) the saved image is that of every frame held, so this
+        waits for the follower to finish it; with a tag (between the series of a continuous run,
+        when the next scan may start at once) the follower's latest image is saved as it is."""
         out_dir.mkdir(parents=True, exist_ok=True)
+        follower = getattr(acc, "obf", None)
+        if follower is not None and follower.enabled:
+            if tag:
+                print(f"[obf] saving its latest image ({follower.state}, "
+                      f"{100 * follower.coverage:.0f}% of the frames held covered)", flush=True)
+            else:
+                print("[obf] finishing the image of every frame held …", flush=True)
+                follower.finalize()
         images = acc.images() if hasattr(acc, "images") else {"raw": acc.result()}
         names = []
         for channel, image in images.items():

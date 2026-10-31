@@ -54,7 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from realtime_stem import __version__   # noqa: E402
 from realtime_stem.processing import registry   # noqa: E402
 from realtime_stem.processing.base import Algorithm   # noqa: E402
-from realtime_stem.ingest.sink import publish_snapshot   # noqa: E402
+from realtime_stem.ingest.sink import ACC_LOCK, publish_snapshot   # noqa: E402
 
 _HOLOSCAN_MODULES = ("holoscan", "dectris_holoscan_ops")
 
@@ -361,6 +361,15 @@ def main() -> None:
         if saver is not None:
             acc.on_pass_complete = (lambda k, acc=acc: algorithm.save_pass(
                 acc, args.out_dir, k, args.save_passes_dtype, executor=saver))
+        if hasattr(acc, "on_refresh") and publisher is not None:
+            def refresh(acc=acc):
+                """New content outside a batch (a background channel, e.g. parallax's OBF):
+                publish it, also when no frames arrive."""
+                if control is not None and control.acc is not acc:
+                    return                    # replaced by a mode switch
+                with ACC_LOCK:
+                    publish_snapshot(publisher, acc)
+            acc.on_refresh = refresh
 
     control = None
     if args.viewer_port:
@@ -487,6 +496,9 @@ def main() -> None:
         if control is not None and not stopped:
             wait_with_viewer(control, stop, algorithm, args.out_dir)
     finally:
+        for a in {id(a): a for a in (acc, control and control.acc) if a is not None}.values():
+            if hasattr(a, "close"):
+                a.close()                     # what runs beside it (parallax: OBF's thread)
         if saver is not None:
             saver.shutdown(wait=True)         # every completed pass is on disk before exiting
         if publisher is not None:

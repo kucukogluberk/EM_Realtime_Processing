@@ -37,6 +37,9 @@ class LiveControl:
         self.acc: Accumulator | None = None            # the running accumulator
         self._sink: Callable[[], object] = lambda: None   # → the running BatchSink, if any yet
         self.initial = {p["name"]: p["value"] for p in algorithm.live_params(args)}
+        self.initial_switches = {s["name"]: s["value"] for s in algorithm.live_switches(args, None)}
+        self.initial_switches.update(
+            {c["name"]: c["active"] for c in algorithm.live_channels(args, None)})
         self.initial_mode = args.accumulate
         self.modes = list(MODES) if args.accumulate in MODES else []
         self.note = ""
@@ -53,17 +56,21 @@ class LiveControl:
         if self.modes:
             flags += ["--accumulate", self.args.accumulate]
         return {"params": self.algorithm.live_params(self.args), "initial": self.initial,
+                "switches": self.algorithm.live_switches(self.args, self.acc),
+                "channels": self.algorithm.live_channels(self.args, self.acc),
                 "mode": self.args.accumulate, "modes": self.modes,
                 "initial_mode": self.initial_mode, "flags": " ".join(flags), "note": self.note}
 
     def update(self, changes: dict) -> dict:
-        """Apply `changes` ({name: value}, optionally "mode", or {"reset": true} for the command
-        line's values) and return the new state. Raises ValueError for a change it can't make."""
+        """Apply `changes` ({name: value}, a switch or an on-demand channel {name: bool},
+        optionally "mode", or {"reset": true} for the command line's values) and return the new
+        state. Raises ValueError for a change it can't make."""
         changes = dict(changes)
         if changes.pop("reset", False):
             changes = dict(self.initial)
             if self.modes:
                 changes["mode"] = self.initial_mode
+            changes.update(self.initial_switches)
         mode = changes.pop("mode", None)
         notes = []
         with ACC_LOCK:
@@ -90,6 +97,7 @@ class LiveControl:
         self.args.accumulate = mode
         if self.acc is None:
             return f"{mode} from the first frame"
+        old = self.acc
         new = self.algorithm.build(self.args)
         if self.on_new_accumulator is not None:
             self.on_new_accumulator(new)
@@ -97,4 +105,6 @@ class LiveControl:
         if sink is not None:
             sink.replace_accumulator(new)
         self.acc = new
+        if hasattr(old, "close"):
+            old.close(wait=False)          # what runs beside it (OBF) stops on its own
         return f"{mode}: a new image from the next frames"
