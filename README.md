@@ -1,5 +1,14 @@
 # realtime-stem
 
+> This repository is frozen at v2.3.0. Development continues in
+> [Live4D](https://github.com/electronmicroscopy/live4d), where parallax, its browser viewer, live
+> tuning and live OBF run as a branch of the Holoscan SDK 5 pipeline, fed over ZMQ or RDMA (see its
+> [parallax guide](https://github.com/electronmicroscopy/live4d/blob/main/docs/parallax/GUIDE.md),
+> electronmicroscopy/live4d#15 and electronmicroscopy/live4d#16). In Live4D,
+> `python -m live4d.parallax.tools.migrate_flags --flags site.flags` turns `run.py` flags into its
+> YAML. This repository keeps the Holoscan 4.4 image, the recorded sessions in `sessions/` and the
+> history, and takes no new features.
+
 Real-time STEM processing at full detector frame rate. Frames stream from a DECTRIS ARINA detector
 (through its detector control unit, the DCU), are decompressed on an NVIDIA GPU and folded into a
 reconstruction **while the scan is running**, so you watch the image fill in during the scan.

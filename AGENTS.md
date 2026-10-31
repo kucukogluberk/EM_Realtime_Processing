@@ -3,6 +3,13 @@
 This file orients an assistant (Claude Code, Codex, Copilot, …) working in this repository on a
 user's machine. Humans: start with `README.md`; the full description is `docs/GUIDE.md`.
 
+## Frozen at v2.3.0
+
+Development continues in [Live4D](https://github.com/electronmicroscopy/live4d), where parallax
+and OBF are under `holoscan_pipeline/python/live4d/` (the numerics in `algorithms/`, the runtime,
+viewer and tools in `parallax/`). Add no features here. Fixes to this repository's documentation
+and recorded sessions are still welcome.
+
 ## What this is
 
 A real-time STEM reconstruction pipeline. A DECTRIS ARINA detector's control unit (the DCU)

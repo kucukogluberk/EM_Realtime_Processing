@@ -4,7 +4,12 @@ Each release is a git tag (`git checkout v2.0.2`). Build the image of a release 
 checkout and tag it with the version, e.g. `docker build -t realtime-stem:v2.0.2 -f
 docker/Dockerfile .`, so the versions can be switched back and forth.
 
-## Unreleased
+## 2.3.0
+
+The last release of realtime-stem as a repository of its own. Parallax, its viewer and live tuning
+moved into Live4D's Holoscan SDK 5 pipeline (electronmicroscopy/live4d#15), and this release's
+live OBF followed (electronmicroscopy/live4d#16), so development continues in
+[Live4D](https://github.com/electronmicroscopy/live4d).
 
 Live optimum bright field (OBF) beside parallax, with `--accumulate latest`: choose OBF in the
 viewer's channel list, or start it with `run.py --compute-obf`. It adds the channel `obf` and saves
